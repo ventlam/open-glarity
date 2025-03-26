@@ -43,3 +43,119 @@
     width: 100% !important;
   }
 }
+
+// 二级菜单样式
+.glarity--service-card {
+  transition: all 0.3s ease;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+}
+
+// 后退按钮样式
+.glarity--back-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+// 服务提供商卡片
+.glarity--provider-card {
+  margin-bottom: 12px;
+  border-radius: 8px;
+  padding: 16px;
+  
+  &:hover {
+    background-color: rgba(0, 0, 0, 0.03);
+  }
+  
+  h4 {
+    margin-top: 0;
+    margin-bottom: 4px;
+  }
+  
+  p {
+    margin: 0;
+    color: #666;
+  }
+}
+
+// 侧边栏导航样式
+.glarity--sidebar-layout {
+  display: flex;
+  min-height: calc(100vh - 60px); // 减去头部高度
+}
+
+.glarity--sidebar {
+  width: 220px;
+  min-width: 220px;
+  border-right: 1px solid #eaeaea;
+  padding: 20px 0;
+  background-color: #f9f9f9;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.glarity--content {
+  flex: 1;
+  padding: 20px 40px;
+  max-width: calc(100% - 220px);
+  overflow-y: auto;
+}
+
+.glarity--nav-item {
+  padding: 10px 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #444;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+  
+  &.active {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: #000;
+    font-weight: 500;
+    border-right: 3px solid #0070f3;
+  }
+  
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.glarity--nav-title {
+  padding: 15px 20px 5px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #999;
+  letter-spacing: 0.5px;
+}
+
+// 移动端响应式设计
+@media screen and (max-width: 768px) {
+  .glarity--sidebar-layout {
+    flex-direction: column;
+  }
+  
+  .glarity--sidebar {
+    width: 100%;
+    min-width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #eaeaea;
+    padding: 10px 0;
+  }
+  
+  .glarity--content {
+    max-width: 100%;
+    padding: 20px;
+  }
+}

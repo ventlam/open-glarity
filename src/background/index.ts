@@ -2,6 +2,9 @@ import Browser from 'webextension-polyfill'
 import { getProviderConfigs, ProviderType, BASE_URL } from '@/config'
 import { ChatGPTProvider, getChatGPTAccessToken, sendMessageFeedback } from './providers/chatgpt'
 import { OpenAIProvider } from './providers/openai'
+import { ClaudeProvider } from './providers/claude'
+import { GeminiProvider } from './providers/gemini'
+import { MistralProvider } from './providers/mistral'
 import { Provider } from './types'
 import { isFirefox, tabSendMsg } from '@/utils/utils'
 
@@ -15,6 +18,15 @@ async function generateAnswers(port: Browser.Runtime.Port, question: string) {
   } else if (providerConfigs.provider === ProviderType.GPT3) {
     const { apiKey, model } = providerConfigs.configs[ProviderType.GPT3]!
     provider = new OpenAIProvider(apiKey, model)
+  } else if (providerConfigs.provider === ProviderType.Claude) {
+    const { apiKey, model } = providerConfigs.configs[ProviderType.Claude]!
+    provider = new ClaudeProvider(apiKey, model)
+  } else if (providerConfigs.provider === ProviderType.Gemini) {
+    const { apiKey, model } = providerConfigs.configs[ProviderType.Gemini]!
+    provider = new GeminiProvider(apiKey, model)
+  } else if (providerConfigs.provider === ProviderType.Mistral) {
+    const { apiKey, model } = providerConfigs.configs[ProviderType.Mistral]!
+    provider = new MistralProvider(apiKey, model)
   } else {
     throw new Error(`Unknown provider ${providerConfigs.provider}`)
   }
