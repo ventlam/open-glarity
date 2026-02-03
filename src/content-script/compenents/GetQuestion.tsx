@@ -13,6 +13,7 @@ import {
   getLangOptionsWithLink,
   waitForElm,
   getConverTranscript,
+  waitForYouTubeData,
 } from '@/content-script/utils'
 import { getBiliTranscript, getBiliVideoId } from '@/utils/bilibili'
 import { queryParam } from 'gb-url'
@@ -239,21 +240,16 @@ export default async function getQuestion() {
     }
 
     try {
+      await waitForYouTubeData(8000)
+
       // Get Transcript Language Options
       const langOptionsWithLink = await getLangOptionsWithLink(videoId)
 
-      if (!langOptionsWithLink || langOptionsWithLink.length === 0) {
-        console.warn('No caption options available for video:', videoId)
-        return {
-          question: null,
-          transcript: [],
-          langOptionsWithLink: [],
-          error: 'no_captions'
-        }
-      }
-
-      // Fetch transcript with fallback
-      const transcriptList = await getConverTranscript({ langOptionsWithLink, videoId, index: 0 })
+      const transcriptList = await getConverTranscript({
+        langOptionsWithLink,
+        videoId,
+        index: 0,
+      })
 
       if (!transcriptList || transcriptList.length === 0) {
         console.warn('Failed to fetch transcript for video:', videoId)

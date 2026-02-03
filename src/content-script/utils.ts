@@ -67,6 +67,14 @@ interface YTInitialPlayerResponse {
   }
 }
 
+interface InnerTubeConfig {
+  apiKey?: string
+  context?: any
+  clientName?: string | number
+  clientVersion?: string
+  visitorData?: string
+}
+
 function extractJsonBlock(
   source: string,
   marker: string,
@@ -115,6 +123,219 @@ function extractJsonBlock(
   }
 
   return null
+}
+
+function getInnerTubeConfigFromWindow(): InnerTubeConfig | null {
+  try {
+    const ytcfg = (window as any).ytcfg
+    const hasYtCfgGet = ytcfg && typeof ytcfg.get === 'function'
+    const apiKey = hasYtCfgGet ? ytcfg.get('INNERTUBE_API_KEY') : ytcfg?.data_?.INNERTUBE_API_KEY
+    const context = hasYtCfgGet
+      ? ytcfg.get('INNERTUBE_CONTEXT')
+      : ytcfg?.data_?.INNERTUBE_CONTEXT
+    const clientName = ytcfg?.get
+      ? ytcfg.get('INNERTUBE_CONTEXT_CLIENT_NAME')
+      : ytcfg?.data_?.INNERTUBE_CONTEXT_CLIENT_NAME
+    const clientVersion = ytcfg?.get
+      ? ytcfg.get('INNERTUBE_CONTEXT_CLIENT_VERSION')
+      : ytcfg?.data_?.INNERTUBE_CONTEXT_CLIENT_VERSION
+    const visitorData = ytcfg?.get ? ytcfg.get('VISITOR_DATA') : ytcfg?.data_?.VISITOR_DATA
+    if (apiKey || context || clientName || clientVersion || visitorData) {
+      return { apiKey, context, clientName, clientVersion, visitorData }
+    }
+  } catch (e) {
+    console.debug('Failed to read ytcfg from window:', e)
+  }
+  return null
+}
+
+async function getInnerTubeConfigFromHtml(videoId: string): Promise<InnerTubeConfig | null> {
+  try {
+    const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+      credentials: 'include',
+    })
+    if (!response.ok) return null
+    const html = await response.text()
+
+    const apiKeyMatch = html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)
+    const apiKey = apiKeyMatch ? apiKeyMatch[1] : undefined
+    const contextRaw = extractJsonBlock(html, '"INNERTUBE_CONTEXT":', '{', '}')
+    const context = contextRaw ? JSON.parse(contextRaw) : undefined
+    const clientNameMatch = html.match(/"INNERTUBE_CONTEXT_CLIENT_NAME":\s*(\d+)/)
+    const clientVersionMatch = html.match(/"INNERTUBE_CONTEXT_CLIENT_VERSION":"([^"]+)"/)
+    const visitorDataMatch = html.match(/"VISITOR_DATA":"([^"]+)"/)
+    const clientName = clientNameMatch ? Number(clientNameMatch[1]) : undefined
+    const clientVersion = clientVersionMatch ? clientVersionMatch[1] : undefined
+    const visitorData = visitorDataMatch ? visitorDataMatch[1] : undefined
+    if (!apiKey && !context && !clientName && !clientVersion && !visitorData) return null
+    return { apiKey, context, clientName, clientVersion, visitorData }
+  } catch (e) {
+    console.debug('Failed to parse InnerTube config from HTML:', e)
+    return null
+  }
+}
+
+function findTranscriptParams(obj: any): string | null {
+  if (!obj || typeof obj !== 'object') return null
+  const queue: any[] = [obj]
+  const visited = new Set<any>()
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current || typeof current !== 'object') continue
+    if (visited.has(current)) continue
+    visited.add(current)
+
+    const direct = current.getTranscriptEndpoint?.params || current.transcriptEndpoint?.params
+    if (direct) return direct
+
+    for (const key of Object.keys(current)) {
+      const value = current[key]
+      if (value && typeof value === 'object') {
+        queue.push(value)
+      }
+    }
+  }
+  return null
+}
+
+function extractTranscriptSegmentsFromInnerTube(data: any): TranscriptSegment[] {
+  const segmentLists =
+    data?.actions?.[0]?.updateEngagementPanelAction?.content?.transcriptRenderer?.body
+      ?.transcriptSegmentListRenderer ||
+    data?.actions?.[0]?.appendContinuationItemsAction?.continuationItems ||
+    data?.transcript?.body?.transcriptSegmentListRenderer ||
+    data?.transcriptSegmentListRenderer
+
+  const segments =
+    segmentLists?.segments ||
+    segmentLists?.initialSegments ||
+    segmentLists?.transcriptSegmentListRenderer?.segments ||
+    []
+
+  if (!Array.isArray(segments)) return []
+
+  return segments
+    .map((segment) => {
+      const renderer =
+        segment.transcriptSegmentRenderer ||
+        segment.transcriptSegmentListRenderer ||
+        segment?.segmentRenderer
+      if (!renderer) return null
+      const text =
+        renderer.snippet?.runs?.map((run: any) => run.text || '').join('') ||
+        renderer.snippet?.text ||
+        ''
+      if (!text) return null
+      const startMs = Number(renderer.startMs || renderer.startMs?.simpleText || 0)
+      const durationMs = Number(renderer.durationMs || renderer.durationMs?.simpleText || 0)
+      return {
+        start: String(startMs / 1000),
+        duration: String(durationMs / 1000),
+        text,
+      } as TranscriptSegment
+    })
+    .filter((segment): segment is TranscriptSegment => !!segment && !!segment.text)
+}
+
+export async function getTranscriptViaInnerTube(videoId: string): Promise<TranscriptSegment[]> {
+  try {
+    const ytInitialData = (window as any).ytInitialData
+    let params = findTranscriptParams(ytInitialData)
+
+    if (!params) {
+      const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+        credentials: 'include',
+      })
+      if (response.ok) {
+        const html = await response.text()
+        const endpointRaw = extractJsonBlock(html, '"getTranscriptEndpoint":', '{', '}')
+        if (endpointRaw) {
+          try {
+            const endpoint = JSON.parse(endpointRaw)
+            if (endpoint?.params) {
+              params = endpoint.params
+            }
+          } catch (e) {
+            console.debug('Failed to parse getTranscriptEndpoint from HTML')
+          }
+        }
+      }
+    }
+
+    if (!params) return []
+
+    let innerTube = getInnerTubeConfigFromWindow()
+    if (!innerTube) {
+      innerTube = await getInnerTubeConfigFromHtml(videoId)
+    }
+
+    if (!innerTube?.apiKey) {
+      return []
+    }
+
+    const context = innerTube.context || {}
+    context.client = context.client || {}
+    if (innerTube.clientName && !context.client.clientName) {
+      context.client.clientName = innerTube.clientName
+    }
+    if (innerTube.clientVersion && !context.client.clientVersion) {
+      context.client.clientVersion = innerTube.clientVersion
+    }
+    if (innerTube.visitorData && !context.client.visitorData) {
+      context.client.visitorData = innerTube.visitorData
+    }
+
+    const url = `https://www.youtube.com/youtubei/v1/get_transcript?key=${innerTube.apiKey}`
+    const body = {
+      context,
+      params,
+    }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (innerTube.clientName) {
+      headers['X-YouTube-Client-Name'] = String(innerTube.clientName)
+    }
+    if (innerTube.clientVersion) {
+      headers['X-YouTube-Client-Version'] = innerTube.clientVersion
+    }
+    if (innerTube.visitorData) {
+      headers['X-Goog-Visitor-Id'] = innerTube.visitorData
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      let errorText = ''
+      try {
+        errorText = await response.text()
+      } catch {
+        errorText = ''
+      }
+      console.debug('InnerTube transcript request failed:', response.status, errorText)
+      return []
+    }
+
+    const data = await response.json()
+    return extractTranscriptSegmentsFromInnerTube(data)
+  } catch (e) {
+    console.debug('Failed to fetch transcript via InnerTube:', e)
+    return []
+  }
 }
 
 function parseVttTranscript(data: string): TranscriptSegment[] {
@@ -175,6 +396,35 @@ function getCaptionsFromInitialData(): CaptionTrack[] | null {
   try {
     const ytData = (window as any).ytInitialPlayerResponse as YTInitialPlayerResponse
     if (!ytData?.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
+      // Try player response from movie_player
+      try {
+        const player = document.getElementById('movie_player') as any
+        const playerResponse = player?.getPlayerResponse?.()
+        if (
+          playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length
+        ) {
+          return playerResponse.captions.playerCaptionsTracklistRenderer.captionTracks
+        }
+      } catch (e) {
+        console.debug('Failed to read captions from movie_player response:', e)
+      }
+
+      // Try legacy ytplayer config
+      try {
+        const ytplayer = (window as any).ytplayer
+        const raw = ytplayer?.config?.args?.player_response
+        if (raw) {
+          const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+          if (
+            parsed?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length
+          ) {
+            return parsed.captions.playerCaptionsTracklistRenderer.captionTracks
+          }
+        }
+      } catch (e) {
+        console.debug('Failed to read captions from ytplayer config:', e)
+      }
+
       return null
     }
     return ytData.captions.playerCaptionsTracklistRenderer.captionTracks
@@ -258,6 +508,34 @@ async function getCaptionsFromVideoPage(videoId: string): Promise<CaptionTrack[]
 }
 
 /**
+ * Extract captions from get_video_info endpoint
+ * This endpoint often contains player_response with captionTracks
+ */
+async function getCaptionsFromVideoInfo(videoId: string): Promise<CaptionTrack[] | null> {
+  try {
+    const url = `https://www.youtube.com/get_video_info?video_id=${videoId}&el=detailpage&hl=en&ps=default&gl=US`
+    const response = await fetch(url, { credentials: 'include' })
+    if (!response.ok) {
+      return null
+    }
+    const text = await response.text()
+    const params = new URLSearchParams(text)
+    const playerResponseRaw = params.get('player_response')
+    if (!playerResponseRaw) return null
+    const playerResponse = JSON.parse(playerResponseRaw)
+    const captionTracks =
+      playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks
+    if (captionTracks && captionTracks.length > 0) {
+      return captionTracks
+    }
+    return null
+  } catch (e) {
+    console.debug('Failed to fetch captions from get_video_info:', e)
+    return null
+  }
+}
+
+/**
  * Extract captions from timedtext track list endpoint
  * Useful when ytInitialPlayerResponse is not accessible
  */
@@ -335,7 +613,12 @@ export async function getLangOptionsWithLink(videoId: string): Promise<{language
     captionTracks = await getCaptionsFromVideoPage(videoId);
   }
 
-  // Method 3: Timedtext track list fallback
+  // Method 3: get_video_info fallback
+  if (!captionTracks || captionTracks.length === 0) {
+    captionTracks = await getCaptionsFromVideoInfo(videoId);
+  }
+
+  // Method 4: Timedtext track list fallback
   if (!captionTracks || captionTracks.length === 0) {
     captionTracks = await getCaptionsFromTimedTextList(videoId);
   }
@@ -606,6 +889,27 @@ export function waitForElm(selector: string): Promise<Element | null> {
   })
 }
 
+export async function waitForYouTubeData(timeoutMs = 5000): Promise<boolean> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const playerResponse = (window as any).ytInitialPlayerResponse
+    const player = document.getElementById('movie_player') as any
+    const playerReady = !!player?.getPlayerResponse
+    const playerHasCaptions =
+      typeof player?.getPlayerResponse === 'function' &&
+      player.getPlayerResponse()?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length
+    if (
+      playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length ||
+      playerHasCaptions ||
+      playerReady
+    ) {
+      return true
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  return false
+}
+
 /**
  * Enhanced transcript fetching with better error handling
  * Returns empty array instead of throwing for better UX
@@ -622,6 +926,14 @@ export async function getConverTranscript({
   try {
     if (!langOptionsWithLink || langOptionsWithLink.length === 0) {
       console.warn('No caption options available for video:', videoId);
+      const performanceTranscript = await getTranscriptFromPerformanceEntries(videoId)
+      if (performanceTranscript.length > 0) {
+        return getTranscriptHTML(performanceTranscript, videoId)
+      }
+      const innerTubeSegments = await getTranscriptViaInnerTube(videoId)
+      if (innerTubeSegments.length > 0) {
+        return getTranscriptHTML(innerTubeSegments, videoId)
+      }
       return [];
     }
     
@@ -655,6 +967,14 @@ export async function getConverTranscript({
     
     if (!rawTranscript || rawTranscript.length === 0) {
       console.warn('Empty transcript received');
+      const performanceTranscript = await getTranscriptFromPerformanceEntries(videoId)
+      if (performanceTranscript.length > 0) {
+        return getTranscriptHTML(performanceTranscript, videoId)
+      }
+      const innerTubeSegments = await getTranscriptViaInnerTube(videoId)
+      if (innerTubeSegments.length > 0) {
+        return getTranscriptHTML(innerTubeSegments, videoId)
+      }
       return [];
     }
     
@@ -681,6 +1001,39 @@ function buildTimedTextFallbackUrl(
     params.set('kind', 'asr')
   }
   return `https://www.youtube.com/api/timedtext?${params.toString()}`
+}
+
+function getTimedTextUrlsFromPerformance(videoId: string): string[] {
+  try {
+    const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[]
+    return entries
+      .map((entry) => entry.name || '')
+      .filter(
+        (url) =>
+          url.includes('/api/timedtext') &&
+          url.includes(`v=${videoId}`) &&
+          !url.includes('fmt=ttml'),
+      )
+  } catch (e) {
+    console.debug('Failed to read performance entries:', e)
+    return []
+  }
+}
+
+async function getTranscriptFromPerformanceEntries(videoId: string): Promise<TranscriptSegment[]> {
+  const urls = getTimedTextUrlsFromPerformance(videoId)
+  if (!urls.length) return []
+  for (const url of urls) {
+    try {
+      const transcript = await getRawTranscript(url)
+      if (transcript && transcript.length > 0) {
+        return transcript
+      }
+    } catch (e) {
+      console.debug('Failed to parse transcript from timedtext URL:', e)
+    }
+  }
+  return []
 }
 
 export function matchSites(site: string) {

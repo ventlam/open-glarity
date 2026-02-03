@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { Spinner, GeistProvider, Loading, Divider } from '@geist-ui/core'
 import { SearchIcon } from '@primer/octicons-react'
 import Browser from 'webextension-polyfill'
@@ -40,6 +40,8 @@ function ChatGPTContainer(props: Props) {
   const [theme, setTheme] = useState(Theme.Auto)
   const [questionProps, setQuestionProps] = useState<Props>({ ...props })
   const [currentTranscript, setCurrentTranscript] = useState(props.transcript)
+  const subtitleObserverRef = useRef<PerformanceObserver | null>(null)
+  const subtitleRetryRef = useRef(0)
 
   const { triggerMode } = props
 
@@ -100,6 +102,73 @@ function ChatGPTContainer(props: Props) {
 
     setQueryStatus(undefined)
   }, [props, loading])
+
+  const hasTimedTextResource = useCallback((videoId: string) => {
+    try {
+      const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[]
+      return entries.some((entry) => {
+        const name = entry.name || ''
+        return name.includes('/api/timedtext') && name.includes(`v=${videoId}`)
+      })
+    } catch {
+      return false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (questionProps.siteConfig?.name !== 'youtube') return
+    if (questionProps.question) return
+
+    const videoId = queryParam('v', window.location.href || '')
+    if (!videoId) return
+
+    if (subtitleRetryRef.current >= 3) return
+
+    const tryRefresh = async () => {
+      subtitleRetryRef.current += 1
+      await onRefresh()
+    }
+
+    if (hasTimedTextResource(videoId)) {
+      tryRefresh()
+      return
+    }
+
+    if (typeof PerformanceObserver === 'undefined') {
+      return
+    }
+
+    if (subtitleObserverRef.current) {
+      return
+    }
+
+    const observer = new PerformanceObserver((list) => {
+      const entries = list.getEntries()
+      for (const entry of entries) {
+        const name = (entry as PerformanceResourceTiming).name || ''
+        if (name.includes('/api/timedtext') && name.includes(`v=${videoId}`)) {
+          observer.disconnect()
+          subtitleObserverRef.current = null
+          tryRefresh()
+          break
+        }
+      }
+    })
+
+    try {
+      observer.observe({ type: 'resource', buffered: true })
+      subtitleObserverRef.current = observer
+    } catch {
+      // ignore observer failures
+    }
+
+    return () => {
+      observer.disconnect()
+      if (subtitleObserverRef.current === observer) {
+        subtitleObserverRef.current = null
+      }
+    }
+  }, [questionProps.siteConfig?.name, questionProps.question, onRefresh, hasTimedTextResource])
 
   const onPlay = useCallback(async (starttime = 0) => {
     const videoElm = document.querySelector(
