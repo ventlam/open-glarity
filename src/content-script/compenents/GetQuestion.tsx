@@ -235,36 +235,72 @@ export default async function getQuestion() {
     const videoId = queryParam('v', window.location.href)
 
     if (!videoId) {
-      return ''
+      return null
     }
 
-    // Get Transcript Language Options & Create Language Select Btns
-    const langOptionsWithLink = await getLangOptionsWithLink(videoId)
+    try {
+      // Get Transcript Language Options
+      const langOptionsWithLink = await getLangOptionsWithLink(videoId)
 
-    const transcriptList = await getConverTranscript({ langOptionsWithLink, videoId, index: 0 })
+      if (!langOptionsWithLink || langOptionsWithLink.length === 0) {
+        console.warn('No caption options available for video:', videoId)
+        return {
+          question: null,
+          transcript: [],
+          langOptionsWithLink: [],
+          error: 'no_captions'
+        }
+      }
 
-    const videoTitle = document.title
-    // const videoUrl = window.location.href
+      // Fetch transcript with fallback
+      const transcriptList = await getConverTranscript({ langOptionsWithLink, videoId, index: 0 })
 
-    const transcript = (
-      transcriptList.map((v) => {
-        return `${v.text}`
-      }) || []
-    ).join('')
+      if (!transcriptList || transcriptList.length === 0) {
+        console.warn('Failed to fetch transcript for video:', videoId)
+        return {
+          question: null,
+          transcript: [],
+          langOptionsWithLink,
+          error: 'transcript_failed'
+        }
+      }
 
-    const Instructions = userConfig.prompt ? `${userConfig.prompt}` : videoSummaryPromptHightligt
+      const videoTitle = document.title
 
-    const queryText = videoPrompt({
-      title: videoTitle,
-      transcript: getSummaryPrompt(transcript, providerConfigs.provider),
-      language: userConfig.language === Language.Auto ? language : userConfig.language,
-      prompt: Instructions,
-    })
+      const transcript = transcriptList.map((v) => v.text).join(' ')
 
-    return {
-      question: transcript.length > 0 ? queryText : '',
-      transcript: transcriptList,
-      langOptionsWithLink,
+      if (transcript.length === 0) {
+        return {
+          question: null,
+          transcript: [],
+          langOptionsWithLink,
+          error: 'empty_transcript'
+        }
+      }
+
+      const Instructions = userConfig.prompt ? `${userConfig.prompt}` : videoSummaryPromptHightligt
+
+      const queryText = videoPrompt({
+        title: videoTitle,
+        transcript: getSummaryPrompt(transcript, providerConfigs.provider),
+        language: userConfig.language === Language.Auto ? language : userConfig.language,
+        prompt: Instructions,
+      })
+
+      return {
+        question: queryText,
+        transcript: transcriptList,
+        langOptionsWithLink,
+        error: null
+      }
+    } catch (error) {
+      console.error('Error processing YouTube video:', error)
+      return {
+        question: null,
+        transcript: [],
+        langOptionsWithLink: [],
+        error: 'processing_error'
+      }
     }
   }
 

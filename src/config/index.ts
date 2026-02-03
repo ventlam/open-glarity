@@ -113,7 +113,29 @@ export enum ProviderType {
   AliModelScope = 'alimodelscope',
   Zhipu = 'zhipu',
   Qwen = 'qwen',
-  Ollama = 'ollama'
+  Ollama = 'ollama',
+  Custom = 'custom' // Added for custom providers
+}
+
+// Custom provider configuration
+export interface CustomProviderConfig {
+  id: string
+  name: string
+  apiKey: string
+  apiHost: string
+  apiPath: string
+  model: string
+  authMethod: 'bearer' | 'api-key' | 'query-param' | 'x-api-key' | 'none'
+  customHeaders?: Record<string, string>
+}
+
+// Provider configuration with dynamic fields
+export interface DynamicProviderConfig {
+  model: string
+  apiKey: string
+  apiHost: string
+  apiPath?: string
+  [key: string]: any // Allow additional dynamic fields
 }
 
 interface GPT3ProviderConfig {
@@ -194,7 +216,7 @@ interface OllamaProviderConfig {
 }
 
 export interface ProviderConfigs {
-  provider: ProviderType
+  provider: ProviderType | string // Support custom provider IDs
   configs: {
     [ProviderType.GPT3]: GPT3ProviderConfig | undefined
     [ProviderType.Claude]: ClaudeProviderConfig | undefined
@@ -207,7 +229,10 @@ export interface ProviderConfigs {
     [ProviderType.Zhipu]: ZhipuProviderConfig | undefined
     [ProviderType.Qwen]: QwenProviderConfig | undefined
     [ProviderType.Ollama]: OllamaProviderConfig | undefined
+    [ProviderType.Custom]: DynamicProviderConfig | undefined
+    [key: string]: any // Support for custom providers with dynamic IDs
   }
+  customProviders?: CustomProviderConfig[] // Array of custom provider configurations
 }
 
 export async function getProviderConfigs(): Promise<ProviderConfigs> {
@@ -225,7 +250,8 @@ export async function getProviderConfigs(): Promise<ProviderConfigs> {
     [ProviderType.AliModelScope]: undefined,
     [ProviderType.Zhipu]: undefined,
     [ProviderType.Qwen]: undefined,
-    [ProviderType.Ollama]: undefined
+    [ProviderType.Ollama]: undefined,
+    [ProviderType.Custom]: undefined
   }
   
   // 获取所有提供商的配置
@@ -249,27 +275,81 @@ export async function getProviderConfigs(): Promise<ProviderConfigs> {
     configs[type] = config
   }
 
+  // Load custom providers
+  const { customProviders = [] } = await Browser.storage.local.get('customProviders')
+  
+  // Add custom provider configs
+  for (const customProvider of customProviders) {
+    if (customProvider && customProvider.id) {
+      configs[customProvider.id] = customProvider
+    }
+  }
+
   return {
     provider,
-    configs
+    configs,
+    customProviders
   }
 }
 
 export async function saveProviderConfigs(
-  provider: ProviderType,
+  provider: ProviderType | string,
   configs: ProviderConfigs['configs'],
+  customProviders?: CustomProviderConfig[]
 ) {
   // 创建保存对象
   const saveObj: Record<string, any> = { provider };
   
-  // 为每个提供商添加配置
+  // 为每个内置提供商添加配置
   Object.values(ProviderType).forEach(type => {
     if (configs[type]) {
       saveObj[`provider:${type}`] = configs[type];
     }
   });
   
+  // 保存自定义提供商配置
+  if (customProviders) {
+    saveObj['customProviders'] = customProviders;
+    
+    // 同时保存每个自定义提供商的独立配置（便于快速访问）
+    customProviders.forEach(customProvider => {
+      if (customProvider && customProvider.id) {
+        saveObj[`provider:${customProvider.id}`] = customProvider;
+      }
+    });
+  }
+  
   return Browser.storage.local.set(saveObj);
+}
+
+// Helper function to save a single custom provider
+export async function saveCustomProvider(provider: CustomProviderConfig): Promise<void> {
+  const { customProviders = [] } = await Browser.storage.local.get('customProviders');
+  
+  // Find and update or add new
+  const index = customProviders.findIndex((p: CustomProviderConfig) => p.id === provider.id);
+  if (index >= 0) {
+    customProviders[index] = provider;
+  } else {
+    customProviders.push(provider);
+  }
+  
+  return Browser.storage.local.set({
+    customProviders,
+    [`provider:${provider.id}`]: provider
+  });
+}
+
+// Helper function to delete a custom provider
+export async function deleteCustomProvider(providerId: string): Promise<void> {
+  const { customProviders = [] } = await Browser.storage.local.get('customProviders');
+  
+  const updatedProviders = customProviders.filter((p: CustomProviderConfig) => p.id !== providerId);
+  
+  return Browser.storage.local.set({
+    customProviders: updatedProviders,
+    [`provider:${providerId}`]: undefined
+  });
 }
 
 export const BASE_URL = 'https://chat.openai.com'

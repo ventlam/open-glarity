@@ -43,110 +43,284 @@ export function removeHtmlTags(str: string) {
   return str.replace(/<[^>]+>/g, '')
 }
 
-export async function getLangOptionsWithLink(videoId) {
-  // Get a transcript URL
-  const videoPageResponse = await fetch('https://www.youtube.com/watch?v=' + videoId)
-  const videoPageHtml = await videoPageResponse.text()
-  const splittedHtml = videoPageHtml.split('"captions":')
-
-  if (splittedHtml.length < 2) {
-    return
-  } // No Caption Available
-
-  const captions_json = JSON.parse(splittedHtml[1].split(',"videoDetails')[0].replace('\n', ''))
-  const captionTracks = captions_json.playerCaptionsTracklistRenderer.captionTracks
-  const languageOptions = Array.from(captionTracks).map((i) => {
-    return i.name.simpleText
-  })
-
-  const first = 'English' // Sort by English first
-  languageOptions.sort(function (x, y) {
-    return x.includes(first) ? -1 : y.includes(first) ? 1 : 0
-  })
-  languageOptions.sort(function (x, y) {
-    return x == first ? -1 : y == first ? 1 : 0
-  })
-
-  return Array.from(languageOptions).map((langName, index) => {
-    const link = captionTracks.find((i) => i.name.simpleText === langName).baseUrl
-    return {
-      language: langName,
-      link: link,
-    }
-  })
+// Enhanced YouTube transcript extraction with multiple fallback methods
+interface CaptionTrack {
+  baseUrl: string
+  name: {
+    simpleText: string
+  }
+  languageCode: string
+  kind?: string // 'asr' for auto-generated
 }
 
-export async function getRawTranscript(link) {
-  // Get Transcript
-  const transcriptPageResponse = await fetch(link) // default 0
-  const transcriptPageXml = await transcriptPageResponse.text()
-
-  // Parse Transcript
-  const jQueryParse = $.parseHTML(transcriptPageXml)
-  const textNodes = jQueryParse[1].childNodes
-
-  return Array.from(textNodes).map((i) => {
-    return {
-      start: i.getAttribute('start'),
-      duration: i.getAttribute('dur'),
-      text: i.textContent,
-    }
-  })
+interface PlayerCaptionsTracklistRenderer {
+  captionTracks: CaptionTrack[]
 }
 
-export async function getTranscriptHTML(rawTranscript: string[], videoId) {
-  const scriptObjArr = [],
-    timeUpperLimit = 60,
-    charInitLimit = 300,
-    charUpperLimit = 500
-  let loop = 0,
-    chars = [],
-    charCount = 0,
-    timeSum = 0,
-    tempObj = {},
-    remaining = {}
+interface YTInitialPlayerResponse {
+  captions?: {
+    playerCaptionsTracklistRenderer: PlayerCaptionsTracklistRenderer
+  }
+  videoDetails?: {
+    videoId: string
+    title: string
+  }
+}
 
+/**
+ * Extract captions from window.ytInitialPlayerResponse (primary method)
+ */
+function getCaptionsFromInitialData(): CaptionTrack[] | null {
+  try {
+    const ytData = (window as any).ytInitialPlayerResponse as YTInitialPlayerResponse
+    if (!ytData?.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
+      return null
+    }
+    return ytData.captions.playerCaptionsTracklistRenderer.captionTracks
+  } catch (e) {
+    console.debug('Failed to extract captions from initial data:', e)
+    return null
+  }
+}
+
+/**
+ * Extract captions from video page HTML using multiple patterns
+ */
+async function getCaptionsFromVideoPage(videoId: string): Promise<CaptionTrack[] | null> {
+  try {
+    const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      }
+    })
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
+    const html = await response.text()
+    
+    // Method 1: Try to find ytInitialPlayerResponse in script tags
+    const ytInitialDataMatch = html.match(/var ytInitialPlayerResponse = ({.+?});/);
+    if (ytInitialDataMatch) {
+      try {
+        const ytData = JSON.parse(ytInitialDataMatch[1]) as YTInitialPlayerResponse;
+        if (ytData?.captions?.playerCaptionsTracklistRenderer?.captionTracks) {
+          return ytData.captions.playerCaptionsTracklistRenderer.captionTracks;
+        }
+      } catch (e) {
+        console.debug('Failed to parse ytInitialPlayerResponse from HTML');
+      }
+    }
+    
+    // Method 2: Try to find captions data directly in HTML
+    const captionsMatch = html.match(/"captionTracks":(\[.+?\])/);
+    if (captionsMatch) {
+      try {
+        const captionTracks = JSON.parse(captionsMatch[1]) as CaptionTrack[];
+        if (captionTracks && captionTracks.length > 0) {
+          return captionTracks;
+        }
+      } catch (e) {
+        console.debug('Failed to parse captionTracks from HTML');
+      }
+    }
+    
+    // Method 3: Legacy string splitting (last resort)
+    const splittedHtml = html.split('"captions":');
+    if (splittedHtml.length >= 2) {
+      try {
+        const captionsPart = splittedHtml[1].split(',"videoDetails"')[0].replace('\n', '');
+        const captionsJson = JSON.parse(captionsPart);
+        const captionTracks = captionsJson?.playerCaptionsTracklistRenderer?.captionTracks;
+        if (captionTracks && captionTracks.length > 0) {
+          return captionTracks;
+        }
+      } catch (e) {
+        console.debug('Failed to parse captions using legacy method');
+      }
+    }
+    
+    return null;
+  } catch (e) {
+    console.debug('Failed to fetch captions from video page:', e);
+    return null;
+  }
+}
+
+/**
+ * Get available language options with transcript links
+ * Priority: 1) window.ytInitialPlayerResponse, 2) Fetch video page HTML
+ */
+export async function getLangOptionsWithLink(videoId: string): Promise<{language: string; link: string; languageCode: string; isAuto: boolean}[] | undefined> {
+  // Method 1: Try window.ytInitialPlayerResponse (fastest, if available)
+  let captionTracks = getCaptionsFromInitialData();
+  
+  // Method 2: Fetch video page HTML
+  if (!captionTracks || captionTracks.length === 0) {
+    captionTracks = await getCaptionsFromVideoPage(videoId);
+  }
+  
+  // No captions available
+  if (!captionTracks || captionTracks.length === 0) {
+    return undefined;
+  }
+  
+  // Sort: English first, then by language name
+  const sortedTracks = [...captionTracks].sort((a, b) => {
+    const aIsEnglish = a.languageCode === 'en' || a.name.simpleText.toLowerCase().includes('english');
+    const bIsEnglish = b.languageCode === 'en' || b.name.simpleText.toLowerCase().includes('english');
+    
+    if (aIsEnglish && !bIsEnglish) return -1;
+    if (!aIsEnglish && bIsEnglish) return 1;
+    
+    // Both English or both non-English: sort by name
+    return a.name.simpleText.localeCompare(b.name.simpleText);
+  });
+  
+  return sortedTracks.map(track => ({
+    language: track.name.simpleText,
+    link: track.baseUrl,
+    languageCode: track.languageCode,
+    isAuto: track.kind === 'asr' // Auto-generated speech recognition
+  }));
+}
+
+interface TranscriptSegment {
+  start: string
+  duration: string
+  text: string
+}
+
+/**
+ * Fetch raw transcript from caption URL
+ * Handles both XML and JSON formats
+ */
+export async function getRawTranscript(link: string): Promise<TranscriptSegment[]> {
+  try {
+    const response = await fetch(link);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch transcript: HTTP ${response.status}`);
+    }
+    
+    const contentType = response.headers.get('content-type') || '';
+    const data = await response.text();
+    
+    // Check if response is JSON
+    if (contentType.includes('application/json')) {
+      try {
+        const jsonData = JSON.parse(data);
+        // Handle different JSON formats
+        if (jsonData.events) {
+          // YouTube's timedtext JSON format
+          return jsonData.events
+            .filter((event: any) => event.segs)
+            .map((event: any) => ({
+              start: String(event.tStartMs / 1000),
+              duration: String((event.dDurationMs || 1000) / 1000),
+              text: event.segs.map((seg: any) => seg.utf8).join(' ')
+            }));
+        }
+      } catch (e) {
+        console.debug('Failed to parse JSON transcript:', e);
+      }
+    }
+    
+    // Parse XML format (traditional timedtext)
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(data, 'text/xml');
+      const textNodes = xmlDoc.querySelectorAll('text');
+      
+      if (textNodes.length === 0) {
+        // Fallback to jQuery parsing for compatibility
+        const jQueryParse = $.parseHTML(data);
+        const nodes = jQueryParse[1]?.childNodes || [];
+        
+        return Array.from(nodes).map((node: any) => ({
+          start: node.getAttribute('start') || '0',
+          duration: node.getAttribute('dur') || '0',
+          text: node.textContent || ''
+        }));
+      }
+      
+      return Array.from(textNodes).map((node) => ({
+        start: node.getAttribute('start') || '0',
+        duration: node.getAttribute('dur') || '0',
+        text: node.textContent || ''
+      }));
+    } catch (e) {
+      console.debug('Failed to parse XML transcript:', e);
+      throw new Error('Failed to parse transcript format');
+    }
+  } catch (error) {
+    console.error('Error fetching transcript:', error);
+    throw error;
+  }
+}
+
+interface TranscriptHTMLItem {
+  time: string
+  text: string
+  start: number
+}
+
+export async function getTranscriptHTML(rawTranscript: TranscriptSegment[], videoId: string): Promise<TranscriptHTMLItem[]> {
+  const scriptObjArr: any[] = []
+  const timeUpperLimit = 60
+  const charInitLimit = 300
+  const charUpperLimit = 500
+  
+  let loop = 0
+  let chars: string[] = []
+  let charCount = 0
+  let timeSum = 0
+  let tempObj: any = {}
+  let remaining: any = {}
+  
   // Sum-up to either total 60 seconds or 300 chars.
   Array.from(rawTranscript).forEach((obj, i, arr) => {
     // Check Remaining Text from Prev Loop
     if (remaining.start && remaining.text) {
       tempObj.start = remaining.start
       chars.push(remaining.text)
-      remaining = {} // Once used, reset to {}
+      remaining = {}
     }
-
+    
     // Initial Loop: Set Start Time
     if (loop == 0) {
       tempObj.start = remaining.start ? remaining.start : obj.start
     }
-
+    
     loop++
-
-    const startSeconds = Math.round(tempObj.start)
-    const seconds = Math.round(obj.start)
+    
+    const startSeconds = Math.round(Number(tempObj.start))
+    const seconds = Math.round(Number(obj.start))
     timeSum = seconds - startSeconds
     charCount += obj.text.length
     chars.push(obj.text)
-
+    
     if (i == arr.length - 1) {
       tempObj.text = chars.join(' ').replace(/\n/g, ' ')
       scriptObjArr.push(tempObj)
       resetNums()
       return
     }
-
+    
     if (timeSum > timeUpperLimit) {
       tempObj.text = chars.join(' ').replace(/\n/g, ' ')
       scriptObjArr.push(tempObj)
       resetNums()
       return
     }
-
+    
     if (charCount > charInitLimit) {
       if (charCount < charUpperLimit) {
         if (obj.text.includes('.')) {
           const splitStr = obj.text.split('.')
-
+          
           // Case: the last letter is . => Process regulary
           if (splitStr[splitStr.length - 1].replace(/\s+/g, '') == '') {
             tempObj.text = chars.join(' ').replace(/\n/g, ' ')
@@ -154,7 +328,7 @@ export async function getTranscriptHTML(rawTranscript: string[], videoId) {
             resetNums()
             return
           }
-
+          
           // Case: . is in the middle
           // 1. Get the (length - 2) str, then get indexOf + str.length + 1, then substring(0,x)
           // 2. Create remaining { text: str.substring(x), start: obj.start } => use the next loop
@@ -163,7 +337,7 @@ export async function getTranscriptHTML(rawTranscript: string[], videoId) {
           const textToUse = obj.text.substring(0, substrIndex)
           remaining.text = obj.text.substring(substrIndex)
           remaining.start = obj.start
-
+          
           // Replcae arr element
           chars.splice(chars.length - 1, 1, textToUse)
           tempObj.text = chars.join(' ').replace(/\n/g, ' ')
@@ -175,71 +349,67 @@ export async function getTranscriptHTML(rawTranscript: string[], videoId) {
           return
         }
       }
-
+      
       tempObj.text = chars.join(' ').replace(/\n/g, ' ')
       scriptObjArr.push(tempObj)
       resetNums()
       return
     }
   })
-
+  
   return Array.from(scriptObjArr).map((obj) => {
-    const t = Math.round(obj.start)
+    const t = Math.round(Number(obj.start))
     const hhmmss = convertIntToHms(t)
-
+    
     return {
       time: hhmmss,
       text: obj.text,
       start: t,
     }
   })
-
+  
   function resetNums() {
     ;(loop = 0), (chars = []), (charCount = 0), (timeSum = 0), (tempObj = {})
   }
 }
 
-function convertIntToHms(num) {
+function convertIntToHms(num: number): string {
   const h = num < 3600 ? 14 : 11
   return new Date(num * 1000).toISOString().substring(h, 19).toString()
 }
 
-export function copyTranscript(videoId, subtitle) {
+export function copyTranscript(videoId: string, subtitle: TranscriptHTMLItem[]) {
   let contentBody = ''
   const url = `https://www.youtube.com/watch?v=${videoId}`
   contentBody += `${document.title}\n`
   contentBody += `${url}\n\n`
-
+  
   contentBody += `Transcript:\n`
-
-  if (!subtitle) {
+  
+  if (!subtitle || subtitle.length <= 0) {
     return
   }
-
-  if (subtitle.length <= 0) {
-    return
-  }
-
+  
   subtitle.forEach((v) => {
     contentBody += `(${v.time}) ${v.text.replaceAll('&#39;', "'")}\n`
   })
-
+  
   copy(contentBody)
 }
 
-export function waitForElm(selector) {
+export function waitForElm(selector: string): Promise<Element | null> {
   return new Promise((resolve) => {
     if (document.querySelector(selector)) {
       return resolve(document.querySelector(selector))
     }
-
-    const observer = new MutationObserver((mutations) => {
+    
+    const observer = new MutationObserver(() => {
       if (document.querySelector(selector)) {
         resolve(document.querySelector(selector))
         observer.disconnect()
       }
     })
-
+    
     observer.observe(document.body, {
       childList: true,
       subtree: true,
@@ -247,18 +417,52 @@ export function waitForElm(selector) {
   })
 }
 
-export async function getConverTranscript({ langOptionsWithLink, videoId, index }) {
-  const rawTranscript = !langOptionsWithLink
-    ? []
-    : await getRawTranscript(langOptionsWithLink[index ? index : 0].link)
-
-  const transcriptList = !langOptionsWithLink ? [] : await getTranscriptHTML(rawTranscript, videoId)
-
-  return transcriptList
+/**
+ * Enhanced transcript fetching with better error handling
+ * Returns empty array instead of throwing for better UX
+ */
+export async function getConverTranscript({ 
+  langOptionsWithLink, 
+  videoId, 
+  index = 0 
+}: { 
+  langOptionsWithLink: {language: string; link: string; languageCode: string; isAuto: boolean}[] | undefined
+  videoId: string
+  index?: number
+}): Promise<TranscriptHTMLItem[]> {
+  try {
+    if (!langOptionsWithLink || langOptionsWithLink.length === 0) {
+      console.warn('No caption options available for video:', videoId);
+      return [];
+    }
+    
+    // Try to get transcript from the specified language option
+    const selectedOption = langOptionsWithLink[index] || langOptionsWithLink[0];
+    
+    if (!selectedOption.link) {
+      console.warn('No caption link available');
+      return [];
+    }
+    
+    const rawTranscript = await getRawTranscript(selectedOption.link);
+    
+    if (!rawTranscript || rawTranscript.length === 0) {
+      console.warn('Empty transcript received');
+      return [];
+    }
+    
+    const transcriptList = await getTranscriptHTML(rawTranscript, videoId);
+    
+    return transcriptList;
+  } catch (error) {
+    console.error('Error converting transcript:', error);
+    // Return empty array instead of throwing to maintain UI stability
+    return [];
+  }
 }
 
 export function matchSites(site: string) {
-  return /(^(www\.)?(google|baidu)\.)|(^(search\.)?yahoo\.)|(^(www|cn)\.?bing\.)|(^(www\.)?kagi\.)|(^(search\.)?naver\.)|(^(search\.)?brave\.)|(^(www\.)?duckduckgo\.)|(^(\w+\.)?yandex\.)|(^(www\.)?searx\.be)|(^news\.yahoo\.co\.jp)|(^(\w+\.)?ncbi\.nlm\.nih\.gov)|(^(www\.)?newspicks\.com)|(^(www\.)?nikkei\.com)|(^(www\.)?github\.com)|(^(www\.)?youtube\.com)/.test(
+  return /(^(www\.)?(google|baidu)\.)|(^(search\.)?yahoo\.)|(^(www|cn)\.?bing\.)|(^(www\.)?kagi\.)|(^(search\.)?naver\.)|(^(search\.)?brave\.)|(^(www\.)?duckduckgo\.)|(^((\w+\.)?yandex\.)|(^(www\.)?searx\.be)|(^news\.yahoo\.co\.jp)|(^((\w+\.)?ncbi\.nlm\.nih\.gov)|(^(www\.)?newspicks\.com)|(^(www\.)?nikkei\.com)|(^(www\.)?github\.com)|(^(www\.)?youtube\.com)/.test(
     site,
   )
 }

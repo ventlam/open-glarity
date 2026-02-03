@@ -1,34 +1,38 @@
 import Browser from 'webextension-polyfill'
 import { getProviderConfigs, ProviderType, BASE_URL } from '@/config'
 import { ChatGPTProvider, getChatGPTAccessToken, sendMessageFeedback } from './providers/chatgpt'
-import { OpenAIProvider } from './providers/openai'
-import { ClaudeProvider } from './providers/claude'
-import { GeminiProvider } from './providers/gemini'
-import { MistralProvider } from './providers/mistral'
+import { UnifiedAIProvider } from './providers/unified'
 import { Provider } from './types'
 import { isFirefox, tabSendMsg } from '@/utils/utils'
+import { getProviderById } from '@/providers/registry'
 
 async function generateAnswers(port: Browser.Runtime.Port, question: string) {
   const providerConfigs = await getProviderConfigs()
+  const providerId = providerConfigs.provider
 
   let provider: Provider
-  if (providerConfigs.provider === ProviderType.ChatGPT) {
+  if (providerId === ProviderType.ChatGPT) {
     const token = await getChatGPTAccessToken()
     provider = new ChatGPTProvider(token)
-  } else if (providerConfigs.provider === ProviderType.GPT3) {
-    const { apiKey, model } = providerConfigs.configs[ProviderType.GPT3]!
-    provider = new OpenAIProvider(apiKey, model)
-  } else if (providerConfigs.provider === ProviderType.Claude) {
-    const { apiKey, model } = providerConfigs.configs[ProviderType.Claude]!
-    provider = new ClaudeProvider(apiKey, model)
-  } else if (providerConfigs.provider === ProviderType.Gemini) {
-    const { apiKey, model } = providerConfigs.configs[ProviderType.Gemini]!
-    provider = new GeminiProvider(apiKey, model)
-  } else if (providerConfigs.provider === ProviderType.Mistral) {
-    const { apiKey, model } = providerConfigs.configs[ProviderType.Mistral]!
-    provider = new MistralProvider(apiKey, model)
   } else {
-    throw new Error(`Unknown provider ${providerConfigs.provider}`)
+    // Get provider definition from registry
+    const providerDef = getProviderById(providerId)
+    if (!providerDef) {
+      throw new Error(`Unknown provider: ${providerId}`)
+    }
+
+    // Get provider configuration
+    const config = providerConfigs.configs[providerId]
+    if (!config) {
+      throw new Error(`Provider ${providerId} not configured`)
+    }
+
+    // Extract API key and model from config
+    const apiKey = config.apiKey || ''
+    const model = config.model || providerDef.defaultModels[0]
+
+    // Use unified provider for all API-based providers
+    provider = new UnifiedAIProvider(providerId, apiKey, model)
   }
 
   const controller = new AbortController()
