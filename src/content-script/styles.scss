@@ -225,8 +225,7 @@ span.glarity--header__logo {
   &.glarity--main__container--subtitle {
     margin-right: -10px;
     padding-right: 10px;
-    height: 200px;
-    max-height: 200px;
+    max-height: min(30vh, 280px);
     overflow: hidden;
     overflow-y: auto;
   }
@@ -234,11 +233,67 @@ span.glarity--header__logo {
   .glarity--chatgpt--content {
     margin-right: -10px;
     padding-right: 10px;
-    max-height: 260px;
-    height: 260px;
+    max-height: min(45vh, 420px);
     overflow: hidden;
     overflow-y: auto;
+
+    &.is-expanded {
+      max-height: none;
+      overflow: visible;
+    }
   }
+}
+
+.glarity--sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.glarity--section {
+  border: 1px solid;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.glarity--section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.glarity--section__title {
+  font-weight: 600;
+}
+
+.glarity--section__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.glarity--section__chevron {
+  transition: transform 0.2s ease;
+}
+
+.glarity--section.is-open {
+  .glarity--section__chevron {
+    transform: rotate(180deg);
+  }
+}
+
+.glarity--section__body {
+  padding: 8px 12px 12px;
+  border-top: 1px solid;
+}
+
+.glarity--chatgpt--toggle {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
 }
 .glarity--main__loading {
   position: absolute;

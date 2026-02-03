@@ -40,6 +40,9 @@ export class UnifiedAIProvider implements Provider {
     
     // Build request body
     const body = this.buildRequestBody(provider, config, params.prompt)
+    if (provider.requestFormat === 'openai' || provider.requestFormat === 'anthropic') {
+      body.stream = true
+    }
 
     let result = ''
     let messageId = ''

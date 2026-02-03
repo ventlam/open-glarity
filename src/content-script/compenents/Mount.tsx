@@ -12,6 +12,7 @@ import {
 
 interface MountProps {
   question: string | null
+  keyMomentsQuestion?: string | null
   transcript?: unknown
   langOptionsWithLink?: unknown
 }
@@ -20,7 +21,7 @@ export default async function mount(props: MountProps) {
   const siteConfig = sietConfigFn()
   const siteName = siteNameFn()
 
-  const { question, transcript, langOptionsWithLink } = props
+  const { question, keyMomentsQuestion, transcript, langOptionsWithLink } = props
   if (!siteConfig) {
     return
   }
@@ -190,6 +191,7 @@ export default async function mount(props: MountProps) {
   render(
     <ChatGPTContainer
       question={question}
+      keyMomentsQuestion={keyMomentsQuestion}
       transcript={transcript}
       siteConfig={siteConfig}
       langOptionsWithLink={langOptionsWithLink}

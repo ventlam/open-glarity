@@ -6,6 +6,7 @@ import {
   videoPrompt,
   searchPrompt,
   videoSummaryPromptHightligt,
+  videoKeyMomentsPrompt,
   searchPromptHighlight,
 } from '@/utils/prompt'
 import {
@@ -275,6 +276,7 @@ export default async function getQuestion() {
       }
 
       const Instructions = userConfig.prompt ? `${userConfig.prompt}` : videoSummaryPromptHightligt
+      const keyMomentsPrompt = videoKeyMomentsPrompt
 
       const queryText = videoPrompt({
         title: videoTitle,
@@ -283,8 +285,16 @@ export default async function getQuestion() {
         prompt: Instructions,
       })
 
+      const keyMomentsText = videoPrompt({
+        title: videoTitle,
+        transcript: getSummaryPrompt(transcript, providerConfigs.provider),
+        language: userConfig.language === Language.Auto ? language : userConfig.language,
+        prompt: keyMomentsPrompt,
+      })
+
       return {
         question: queryText,
+        keyMomentsQuestion: keyMomentsText,
         transcript: transcriptList,
         langOptionsWithLink,
         error: null

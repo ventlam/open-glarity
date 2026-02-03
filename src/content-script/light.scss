@@ -5,6 +5,20 @@
     background-color: #f9f9f9;
   }
 
+  .glarity--section {
+    background-color: #f1f3f4;
+    border-color: #e0e0e0;
+  }
+
+  .glarity--section__body {
+    border-top-color: #e0e0e0;
+    background-color: #f9f9f9;
+  }
+
+  .glarity--section__actions {
+    color: #666;
+  }
+
   &.glarity--chatgpt--newspicks {
     .glarity--chatgpt {
       color: black;

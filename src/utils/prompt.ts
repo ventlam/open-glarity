@@ -8,6 +8,7 @@ export const videoSummaryPromptHightligt = `Instructions: Your output should use
 - [Emoji] Bulletpoint
 
 Use up to 3 brief bullet points to summarize the content below, Choose an appropriate emoji for each bullet point. and summarize a short highlight: {{Title}} {{Transcript}}.`
+export const videoKeyMomentsPrompt = `Extract the key moments from the video content and present them as concise bullet points. Focus on the most important events, decisions, or highlights. Keep it short and easy to scan.`
 export const searchPromptHighlight = `Using the provided web search results, write a comprehensive reply to the given query. Make sure to cite results using [[number](URL)] notation after the reference. If the provided search results refer to multiple subjects with the same name, write separate answers for each subject. and at last please provide your own insights.`
 
 export const commentSummaryPromptHightligt_bak = (rate: boolean) => {

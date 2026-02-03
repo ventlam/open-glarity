@@ -30,6 +30,8 @@ function ChatGPTQuery(props: Props) {
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   const [done, setDone] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(false)
+  const [isOverflowing, setIsOverflowing] = useState(false)
   const [showTip, setShowTip] = useState(false)
   const [continueConversation, setContinueConversation] = useState(false)
   const [status, setStatus] = useState<QueryStatus>()
@@ -123,8 +125,14 @@ function ChatGPTQuery(props: Props) {
         top: 10000,
         behavior: 'smooth',
       })
+
+      // Check overflow after render
+      requestAnimationFrame(() => {
+        const hasOverflow = wrap.scrollHeight > wrap.clientHeight + 8
+        setIsOverflowing(hasOverflow)
+      })
     }
-  }, [answer])
+  }, [answer, isExpanded])
 
   if (answer) {
     return (
@@ -136,11 +144,24 @@ function ChatGPTQuery(props: Props) {
             answerText={answer.text}
           />
         </div>
-        <div className="glarity--chatgpt--content" ref={wrapRef}>
+        <div
+          className={`glarity--chatgpt--content${isExpanded ? ' is-expanded' : ''}`}
+          ref={wrapRef}
+        >
           <ReactMarkdown rehypePlugins={[[rehypeHighlight, { detect: true }]]}>
             {answer.text}
           </ReactMarkdown>
         </div>
+        {isOverflowing && (
+          <div className="glarity--chatgpt--toggle">
+            <button
+              className="glarity--btn glarity--btn__small"
+              onClick={() => setIsExpanded((prev) => !prev)}
+            >
+              {isExpanded ? '收起' : '展开全部'}
+            </button>
+          </div>
+        )}
         {(continueConversation && answer.conversationId && done) && (
           <div>
             <a href={`https://chat.openai.com/c/${answer.conversationId}`} target="_blank">
