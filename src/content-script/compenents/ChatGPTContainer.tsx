@@ -30,11 +30,19 @@ interface Props {
   siteConfig: SearchEngine
   langOptionsWithLink?: unknown
   currentTime?: number
+  // Chunked mode fields
+  chunkedMode?: boolean
+  chunkQuestions?: string[]
+  mergeInstructions?: string
+  videoTitle?: string
+  language?: string
+  totalChunks?: number
 }
 
 function ChatGPTContainer(props: Props) {
   const [queryStatus, setQueryStatus] = useState<QueryStatus>()
   const [copied, setCopied] = useState(false)
+  const [copiedSections, setCopiedSections] = useState<Record<string, boolean>>({})
   const [selectedOption, setSelectedOption] = useState(0)
   const [loading, setLoading] = useState(false)
   const [theme, setTheme] = useState(Theme.Auto)
@@ -47,6 +55,8 @@ function ChatGPTContainer(props: Props) {
     moments: false,
     transcript: false,
   })
+  const askSectionRef = useRef<HTMLDivElement>(null)
+  const momentsSectionRef = useRef<HTMLDivElement>(null)
 
   const { triggerMode } = props
 
@@ -83,6 +93,21 @@ function ChatGPTContainer(props: Props) {
     copyTranscript(videoId, currentTranscript)
     setCopied(true)
   }
+
+  const copySectionContent = useCallback(async (sectionName: string, sectionRef: React.RefObject<HTMLDivElement>) => {
+    if (!sectionRef.current) return
+
+    // Find the markdown content in the section
+    const markdownBody = sectionRef.current.querySelector('.markdown-body, .gpt-markdown')
+    if (markdownBody) {
+      const text = markdownBody.textContent || ''
+      await navigator.clipboard.writeText(text)
+      setCopiedSections(prev => ({ ...prev, [sectionName]: true }))
+      setTimeout(() => {
+        setCopiedSections(prev => ({ ...prev, [sectionName]: false }))
+      }, 1500)
+    }
+  }, [])
 
   const openOptionsPage = useCallback(() => {
     Browser.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' })
@@ -255,14 +280,31 @@ function ChatGPTContainer(props: Props) {
             {questionProps.siteConfig?.name === 'youtube' ? (
               <div className="glarity--main">
                 <div className="glarity--sections">
-                  <div className={`glarity--section${sectionsOpen.ask ? ' is-open' : ''}`}>
+                  <div className={`glarity--section${sectionsOpen.ask ? ' is-open' : ''}`} ref={askSectionRef}>
                     <div
                       className="glarity--section__header"
-                      onClick={() => toggleSection('ask')}
                     >
-                      <div className="glarity--section__title">Ask about current Video (beta)</div>
+                      <div className="glarity--section__title" onClick={() => toggleSection('ask')}>Summary</div>
                       <div className="glarity--section__actions">
-                        <ChevronDownIcon className="glarity--section__chevron" size={16} />
+                        {queryStatus === 'done' && (
+                          <a
+                            href="javascript:;"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              copySectionContent('ask', askSectionRef)
+                            }}
+                            title="Copy summary"
+                          >
+                            {copiedSections.ask ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                          </a>
+                        )}
+                        <a href="javascript:;" onClick={() => toggleSection('ask')}>
+                          {sectionsOpen.ask ? (
+                            <ChevronUpIcon className="glarity--section__chevron" size={16} />
+                          ) : (
+                            <ChevronDownIcon className="glarity--section__chevron" size={16} />
+                          )}
+                        </a>
                       </div>
                     </div>
                     {sectionsOpen.ask && (
@@ -292,6 +334,11 @@ function ChatGPTContainer(props: Props) {
                                   triggerMode={questionProps.triggerMode}
                                   onStatusChange={setQueryStatus}
                                   currentTime={questionProps.currentTime}
+                                  chunkedMode={questionProps.chunkedMode}
+                                  chunkQuestions={questionProps.chunkQuestions}
+                                  mergeInstructions={questionProps.mergeInstructions}
+                                  videoTitle={questionProps.videoTitle}
+                                  language={questionProps.language}
                                 />
                               </>
                             )}
@@ -316,14 +363,31 @@ function ChatGPTContainer(props: Props) {
                     )}
                   </div>
 
-                  <div className={`glarity--section${sectionsOpen.moments ? ' is-open' : ''}`}>
+                  <div className={`glarity--section${sectionsOpen.moments ? ' is-open' : ''}`} ref={momentsSectionRef}>
                     <div
                       className="glarity--section__header"
-                      onClick={() => toggleSection('moments')}
                     >
-                      <div className="glarity--section__title">Key Moments (beta)</div>
+                      <div className="glarity--section__title" onClick={() => toggleSection('moments')}>Key Moments (beta)</div>
                       <div className="glarity--section__actions">
-                        <ChevronDownIcon className="glarity--section__chevron" size={16} />
+                        {queryStatus === 'done' && questionProps.keyMomentsQuestion && (
+                          <a
+                            href="javascript:;"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              copySectionContent('moments', momentsSectionRef)
+                            }}
+                            title="Copy key moments"
+                          >
+                            {copiedSections.moments ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                          </a>
+                        )}
+                        <a href="javascript:;" onClick={() => toggleSection('moments')}>
+                          {sectionsOpen.moments ? (
+                            <ChevronUpIcon className="glarity--section__chevron" size={16} />
+                          ) : (
+                            <ChevronDownIcon className="glarity--section__chevron" size={16} />
+                          )}
+                        </a>
                       </div>
                     </div>
                     {sectionsOpen.moments && (
@@ -371,7 +435,11 @@ function ChatGPTContainer(props: Props) {
                         <a href="javascript:;" onClick={copytSubtitle}>
                           {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
                         </a>
-                        <ChevronDownIcon className="glarity--section__chevron" size={16} />
+                        {sectionsOpen.transcript ? (
+                          <ChevronUpIcon className="glarity--section__chevron" size={16} />
+                        ) : (
+                          <ChevronDownIcon className="glarity--section__chevron" size={16} />
+                        )}
                       </div>
                     </div>
                     {sectionsOpen.transcript && (
@@ -447,6 +515,11 @@ function ChatGPTContainer(props: Props) {
                               triggerMode={questionProps.triggerMode}
                               onStatusChange={setQueryStatus}
                               currentTime={questionProps.currentTime}
+                              chunkedMode={questionProps.chunkedMode}
+                              chunkQuestions={questionProps.chunkQuestions}
+                              mergeInstructions={questionProps.mergeInstructions}
+                              videoTitle={questionProps.videoTitle}
+                              language={questionProps.language}
                             />
                           </>
                         )}

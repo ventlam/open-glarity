@@ -66,9 +66,13 @@ function PageSummary(props: Props) {
       const userConfig = await getUserConfig()
       const providerConfigs = await getProviderConfigs()
 
+      // Extract model name for dynamic token limits
+      const modelName = providerConfigs.configs[providerConfigs.provider]?.model
+
       const promptContent = getSummaryPrompt(
         content.replace(/(<[^>]+>|\{[^}]+\})/g, ''),
         providerConfigs.provider,
+        modelName,
       )
       const replyLanguage = userConfig.language === Language.Auto ? language : userConfig.language
 

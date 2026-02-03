@@ -1,5 +1,10 @@
 import { getUserConfig, getProviderConfigs, Language } from '@/config'
-import { getSummaryPrompt } from '@/content-script/prompt'
+import {
+  getSummaryPrompt,
+  analyzeTranscriptForChunking,
+  getChunkSummaryPrompt,
+  getMergeSummariesPrompt,
+} from '@/content-script/prompt'
 import {
   articlePrompt,
   googlePatentsPromptHighlight,
@@ -32,6 +37,9 @@ export default async function getQuestion() {
   const userConfig = await getUserConfig()
 
   const providerConfigs = await getProviderConfigs()
+
+  // Extract model name for dynamic token limits
+  const modelName = providerConfigs.configs[providerConfigs.provider]?.model
 
   // PubMed
   if (siteName === 'pubmed') {
@@ -77,7 +85,7 @@ export default async function getQuestion() {
     if (!articleText) {
       return null
     }
-    const content = getSummaryPrompt(articleText, providerConfigs.provider)
+    const content = getSummaryPrompt(articleText, providerConfigs.provider, modelName)
 
     const queryText = articlePrompt({
       title: articleTitle,
@@ -103,7 +111,7 @@ export default async function getQuestion() {
     if (!articleText) {
       return null
     }
-    const content = getSummaryPrompt(articleText, providerConfigs.provider)
+    const content = getSummaryPrompt(articleText, providerConfigs.provider, modelName)
 
     const queryText = articlePrompt({
       title: articleTitle,
@@ -130,7 +138,7 @@ export default async function getQuestion() {
       return null
     }
 
-    const content = getSummaryPrompt(articleText, providerConfigs.provider)
+    const content = getSummaryPrompt(articleText, providerConfigs.provider, modelName)
 
     const queryText = articlePrompt({
       title: articleTitle,
@@ -157,7 +165,7 @@ export default async function getQuestion() {
       return null
     }
 
-    const content = getSummaryPrompt(articleText, providerConfigs.provider)
+    const content = getSummaryPrompt(articleText, providerConfigs.provider, modelName)
 
     const queryText = articlePrompt({
       title: articleTitle,
@@ -184,7 +192,7 @@ export default async function getQuestion() {
       return null
     }
 
-    const content = getSummaryPrompt(articleText, providerConfigs.provider)
+    const content = getSummaryPrompt(articleText, providerConfigs.provider, modelName)
 
     const queryText = articlePrompt({
       title: articleTitle,
@@ -220,7 +228,7 @@ export default async function getQuestion() {
       return null
     }
 
-    const content = getSummaryPrompt(articleText, providerConfigs.provider)
+    const content = getSummaryPrompt(articleText, providerConfigs.provider, modelName)
 
     const queryText = articlePrompt({
       title: articleTitle,
@@ -277,18 +285,61 @@ export default async function getQuestion() {
 
       const Instructions = userConfig.prompt ? `${userConfig.prompt}` : videoSummaryPromptHightligt
       const keyMomentsPrompt = videoKeyMomentsPrompt
+      const replyLanguage = userConfig.language === Language.Auto ? language : userConfig.language
 
+      // Check if we need chunked summarization
+      const chunkAnalysis = analyzeTranscriptForChunking(transcript, modelName)
+
+      if (chunkAnalysis.shouldChunk && chunkAnalysis.chunks) {
+        // Chunked mode: create prompts for each chunk + merge
+        console.log(`[Glarity] Using chunked summarization with ${chunkAnalysis.chunks.length} parts`)
+
+        const chunkQuestions = chunkAnalysis.chunks.map((chunk, index) => {
+          const chunkPrompt = getChunkSummaryPrompt(
+            chunk,
+            index,
+            chunkAnalysis.chunks!.length,
+            videoTitle
+          )
+          return videoPrompt({
+            title: videoTitle,
+            transcript: chunkPrompt,
+            language: replyLanguage,
+            prompt: 'Summarize this part concisely.',
+          })
+        })
+
+        // The merge prompt will use the summaries from all chunks
+        const mergePlaceholder = '__CHUNK_SUMMARIES_PLACEHOLDER__'
+
+        return {
+          question: null,  // Will be generated after chunk summaries
+          keyMomentsQuestion: null,
+          transcript: transcriptList,
+          langOptionsWithLink,
+          error: null,
+          // New fields for chunked mode
+          chunkedMode: true,
+          chunkQuestions,
+          mergeInstructions: Instructions,
+          videoTitle,
+          language: replyLanguage,
+          totalChunks: chunkAnalysis.chunks.length,
+        }
+      }
+
+      // Regular mode: single-pass summarization
       const queryText = videoPrompt({
         title: videoTitle,
-        transcript: getSummaryPrompt(transcript, providerConfigs.provider),
-        language: userConfig.language === Language.Auto ? language : userConfig.language,
+        transcript: getSummaryPrompt(transcript, providerConfigs.provider, modelName),
+        language: replyLanguage,
         prompt: Instructions,
       })
 
       const keyMomentsText = videoPrompt({
         title: videoTitle,
-        transcript: getSummaryPrompt(transcript, providerConfigs.provider),
-        language: userConfig.language === Language.Auto ? language : userConfig.language,
+        transcript: getSummaryPrompt(transcript, providerConfigs.provider, modelName),
+        language: replyLanguage,
         prompt: keyMomentsPrompt,
       })
 
@@ -297,7 +348,8 @@ export default async function getQuestion() {
         keyMomentsQuestion: keyMomentsText,
         transcript: transcriptList,
         langOptionsWithLink,
-        error: null
+        error: null,
+        chunkedMode: false,
       }
     } catch (error) {
       console.error('Error processing YouTube video:', error)
@@ -341,7 +393,7 @@ export default async function getQuestion() {
 
     const queryText = videoPrompt({
       title: videoTitle,
-      transcript: getSummaryPrompt(content, providerConfigs.provider),
+      transcript: getSummaryPrompt(content, providerConfigs.provider, modelName),
       language: userConfig.language === Language.Auto ? language : userConfig.language,
       prompt: Instructions,
     })
@@ -401,7 +453,7 @@ export default async function getQuestion() {
 
     const queryText = searchPrompt({
       query: searchInput.value,
-      results: getSummaryPrompt(searchList, providerConfigs.provider),
+      results: getSummaryPrompt(searchList, providerConfigs.provider, modelName),
       language: userConfig.language === Language.Auto ? language : userConfig.language,
       prompt: Instructions,
     })
@@ -474,7 +526,7 @@ export default async function getQuestion() {
 
     const queryText = searchPrompt({
       query: searchInput.value,
-      results: getSummaryPrompt(searchList, providerConfigs.provider),
+      results: getSummaryPrompt(searchList, providerConfigs.provider, modelName),
       language: userConfig.language === Language.Auto ? language : userConfig.language,
       prompt: Instructions,
     })

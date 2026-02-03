@@ -6,7 +6,6 @@ import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import Browser from 'webextension-polyfill'
 import { Answer } from '@/messaging'
-import ChatGPTFeedback from './ChatGPTFeedback'
 import { debounce } from 'lodash-es'
 import { isBraveBrowser, shouldShowRatingTip } from '@/content-script/utils'
 import { BASE_URL } from '@/config'
@@ -14,6 +13,17 @@ import { isIOS, isSafari } from '@/utils/utils'
 import { getUserConfig } from '@/config'
 
 import '@/content-script/styles.scss'
+
+// Simple hash function for cache keys
+function hashCode(str: string): string {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(36)
+}
 
 export type QueryStatus = 'success' | 'error' | 'done' | undefined
 
@@ -89,8 +99,53 @@ function ChatGPTQuery(props: Props) {
   }, [onStatusChange, status])
 
   useEffect(() => {
+    // Generate cache key based on question hash
+    const cacheKey = `glarity_cache_${hashCode(question)}`
+
+    // Try to load from cache first
+    try {
+      const cachedData = localStorage.getItem(cacheKey)
+      if (cachedData && !retry) {
+        const cached = JSON.parse(cachedData)
+        // Check if cache is still valid (24 hours)
+        const cacheAge = Date.now() - cached.timestamp
+        const maxAge = 24 * 60 * 60 * 1000 // 24 hours
+
+        if (cacheAge < maxAge) {
+          console.log('[Glarity] Using cached response')
+          setAnswer(cached.answer)
+          setDone(true)
+          setStatus('done')
+          return
+        } else {
+          // Cache expired, remove it
+          localStorage.removeItem(cacheKey)
+        }
+      }
+    } catch (e) {
+      console.warn('[Glarity] Failed to load cache:', e)
+    }
+
+    // No cache or retry requested, make API call
     requestGpt()
   }, [question, retry, currentTime, requestGpt])
+
+  // Save to cache when answer is complete
+  useEffect(() => {
+    if (done && answer && !error) {
+      const cacheKey = `glarity_cache_${hashCode(question)}`
+      try {
+        const cacheData = {
+          answer,
+          timestamp: Date.now(),
+        }
+        localStorage.setItem(cacheKey, JSON.stringify(cacheData))
+        console.log('[Glarity] Response cached')
+      } catch (e) {
+        console.warn('[Glarity] Failed to save cache:', e)
+      }
+    }
+  }, [done, answer, error, question])
 
   // retry error on focus
   useEffect(() => {
@@ -137,13 +192,6 @@ function ChatGPTQuery(props: Props) {
   if (answer) {
     return (
       <div className="markdown-body gpt-markdown" id="gpt-answer" dir="auto">
-        <div className="glarity--chatgpt--header">
-          <ChatGPTFeedback
-            messageId={answer.messageId}
-            conversationId={answer.conversationId}
-            answerText={answer.text}
-          />
-        </div>
         <div
           className={`glarity--chatgpt--content${isExpanded ? ' is-expanded' : ''}`}
           ref={wrapRef}

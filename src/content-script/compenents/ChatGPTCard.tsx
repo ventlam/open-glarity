@@ -2,6 +2,7 @@ import { LightBulbIcon, SearchIcon } from '@primer/octicons-react'
 import { useState } from 'preact/hooks'
 import { TriggerMode } from '@/config'
 import ChatGPTQuery, { QueryStatus } from './ChatGPTQuery'
+import ChunkedChatGPTQuery from './ChunkedChatGPTQuery'
 import { endsWithQuestionMark } from '@/content-script/utils'
 
 interface Props {
@@ -9,12 +10,43 @@ interface Props {
   triggerMode: TriggerMode
   onStatusChange?: (status: QueryStatus) => void
   currentTime?: number
+  // New fields for chunked mode
+  chunkedMode?: boolean
+  chunkQuestions?: string[]
+  mergeInstructions?: string
+  videoTitle?: string
+  language?: string
 }
 
 function ChatGPTCard(props: Props) {
-  const { triggerMode, question, onStatusChange, currentTime: propCurrentTime } = props
+  const {
+    triggerMode,
+    question,
+    onStatusChange,
+    currentTime: propCurrentTime,
+    chunkedMode,
+    chunkQuestions,
+    mergeInstructions,
+    videoTitle,
+    language,
+  } = props
 
   const [triggered, setTriggered] = useState(false)
+
+  // Handle chunked mode
+  if (chunkedMode && chunkQuestions && mergeInstructions && videoTitle && language) {
+    if (triggerMode === TriggerMode.Always || propCurrentTime || triggered) {
+      return (
+        <ChunkedChatGPTQuery
+          chunkQuestions={chunkQuestions}
+          mergeInstructions={mergeInstructions}
+          videoTitle={videoTitle}
+          language={language}
+          onComplete={() => onStatusChange?.('done')}
+        />
+      )
+    }
+  }
 
   if (triggerMode === TriggerMode.Always || propCurrentTime) {
     return (
