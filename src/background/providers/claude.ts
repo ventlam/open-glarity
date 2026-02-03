@@ -16,7 +16,7 @@ export class ClaudeProvider implements Provider {
     const [config] = await Promise.all([getProviderConfigs()])
 
     const claudeConfig = config.configs[ProviderType.Claude]
-    const claudeModel = claudeConfig?.model || 'claude-3-opus-20240229'
+    const claudeModel = claudeConfig?.model || 'claude-sonnet-4-5'
     const apiHost = claudeConfig?.apiHost || 'api.anthropic.com'
     const apiPath = claudeConfig?.apiPath || '/v1/messages'
 

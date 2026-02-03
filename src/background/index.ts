@@ -17,11 +17,6 @@ async function generateAnswers(port: Browser.Runtime.Port, question: string) {
   } else {
     // Get provider definition from registry
     const providerDef = getProviderById(providerId)
-    if (!providerDef) {
-      throw new Error(`Unknown provider: ${providerId}`)
-    }
-
-    // Get provider configuration
     const config = providerConfigs.configs[providerId]
     if (!config) {
       throw new Error(`Provider ${providerId} not configured`)
@@ -29,7 +24,7 @@ async function generateAnswers(port: Browser.Runtime.Port, question: string) {
 
     // Extract API key and model from config
     const apiKey = config.apiKey || ''
-    const model = config.model || providerDef.defaultModels[0]
+    const model = config.model || providerDef?.defaultModels?.[0]
 
     // Use unified provider for all API-based providers
     provider = new UnifiedAIProvider(providerId, apiKey, model)

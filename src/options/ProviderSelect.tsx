@@ -1,100 +1,257 @@
-import { Button, Input, Modal, Text, Radio, Card, Collapse, Toggle } from '@geist-ui/core'
-import { FC, useCallback, useState, useEffect, useMemo } from 'react'
-import useSWR from 'swr'
-import { 
-  getProviderConfigs, 
-  ProviderConfigs, 
-  ProviderType, 
-  saveProviderConfigs, 
-  saveCustomProvider,
+import {
+  Button,
+  Collapse,
+  Input,
+  Modal,
+  Text,
+  Toggle,
+  useToasts,
+} from '@geist-ui/core'
+import { useEffect, useMemo, useState } from 'preact/hooks'
+import {
+  CustomProviderConfig,
+  ProviderType,
   deleteCustomProvider,
-  getUserConfig, 
-  updateUserConfig,
+  getProviderConfigs,
+  getUserConfig,
   parseCustomModels,
-  CustomProviderConfig
+  saveCustomProvider,
+  saveProviderConfigs,
+  updateUserConfig,
 } from '@/config'
-import { Select as Aselect, Tabs, Space, Tag, Tooltip } from 'antd'
-import { 
-  BUILT_IN_PROVIDERS, 
+import {
+  BUILT_IN_PROVIDERS,
   CUSTOM_PROVIDER_TEMPLATE,
-  providerRegistry,
   ProviderDefinition,
   ProviderField,
-  buildRequestUrl,
   buildAuthHeaders,
   buildRequestBody,
-  getProviderById
+  buildRequestUrl,
 } from '@/providers/registry'
-import { isSafari } from '@/utils/utils'
-import { 
-  PlusOutlined, 
-  DeleteOutlined, 
-  SettingOutlined, 
-  ApiOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  ThunderboltOutlined
-} from '@ant-design/icons'
+import Browser from 'webextension-polyfill'
 
-const { Option } = Aselect
-const { TabPane } = Tabs
-
-interface ProviderSelectProps {
-  onProviderChange?: (provider: ProviderType | string) => void
+const normalizeArray = <T,>(value: unknown): T[] => {
+  if (Array.isArray(value)) return value as T[]
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, T>)
+  }
+  return []
 }
 
-// Provider Card Component
-const ProviderCard: FC<{
-  provider: ProviderDefinition
-  isActive: boolean
-  onClick: () => void
-  config?: any
-}> = ({ provider, isActive, onClick, config }) => {
-  const isConfigured = !!config?.apiKey
-  
+type NativeSelectOption = { value: string; label: string }
+
+const NativeSelect = ({
+  value,
+  options,
+  onChange,
+  disabled,
+}: {
+  value: string
+  options: NativeSelectOption[]
+  onChange: (value: string) => void
+  disabled?: boolean
+}) => {
+  const safeValue =
+    options.find((option) => option.value === value)?.value ?? options[0]?.value ?? ''
   return (
-    <div 
-      onClick={onClick}
-      className={`
-        glarity--relative glarity--p-4 glarity--rounded-lg glarity--cursor-pointer
-        glarity--border-2 glarity--transition-all glarity--duration-200
-        ${isActive 
-          ? 'glarity--border-blue-500 glarity--bg-blue-50' 
-          : 'glarity--border-gray-200 glarity--hover:border-gray-300 glarity--bg-white'
-        }
-      `}
-    >
-      <div className="glarity--flex glarity--items-start glarity--justify-between">
-        <div className="glarity--flex-1">
-          <div className="glarity--flex glarity--items-center glarity--gap-2">
-            <Text b>{provider.name}</Text>
-            {isConfigured && (
-              <Tooltip title="已配置">
-                <CheckCircleOutlined className="glarity--text-green-500" />
-              </Tooltip>
-            )}
-          </div>
-          <Text small className="glarity--mt-1 glarity--block glarity--text-gray-500">
-            {provider.description}
-          </Text>
-        </div>
-        {isActive && (
-          <div className="glarity--ml-2">
-            <div className="glarity--w-3 glarity--h-3 glarity--rounded-full glarity--bg-blue-500" />
-          </div>
-        )}
-      </div>
+    <div className="glarity--native-select">
+      <select
+        value={safeValue}
+        onChange={(e) => onChange(e.currentTarget.value)}
+        disabled={disabled}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
     </div>
   )
 }
 
-// Custom Provider Modal
-const CustomProviderModal: FC<{
+const SUPPORTED_PROVIDER_IDS = new Set([
+  ProviderType.GPT3,
+  ProviderType.Claude,
+  ProviderType.Gemini,
+  ProviderType.Mistral,
+])
+
+const BUILT_IN_LIST = normalizeArray<ProviderDefinition>(BUILT_IN_PROVIDERS)
+
+const PRESET_CUSTOM_PROVIDERS: CustomProviderConfig[] = [
+  {
+    id: 'preset-deepseek-v3.2',
+    name: 'DeepSeek-V3.2',
+    apiKey: '',
+    apiHost: 'api.deepseek.com',
+    apiPath: '/v1/chat/completions',
+    model: 'deepseek-chat',
+    defaultModels: ['deepseek-chat', 'deepseek-reasoner'],
+    authMethod: 'bearer',
+  },
+  {
+    id: 'preset-gpt-5-mini',
+    name: 'GPT-5 mini',
+    apiKey: '',
+    apiHost: 'api.openai.com',
+    apiPath: '/v1/chat/completions',
+    model: 'gpt-5-mini',
+    authMethod: 'bearer',
+  },
+  {
+    id: 'preset-claude-4.5-haiku',
+    name: 'Claude 4.5 Haiku',
+    apiKey: '',
+    apiHost: 'api.anthropic.com',
+    apiPath: '/v1/messages',
+    model: 'claude-haiku-4-5',
+    authMethod: 'x-api-key',
+    requestFormat: 'anthropic',
+    customHeaders: {
+      'anthropic-version': '2023-06-01',
+    },
+  },
+  {
+    id: 'preset-gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
+    apiKey: '',
+    apiHost: 'generativelanguage.googleapis.com',
+    apiPath: '/v1beta/models/{model}:streamGenerateContent',
+    model: 'gemini-2.5-flash',
+    authMethod: 'query-param',
+    authKeyName: 'key',
+    requestFormat: 'gemini',
+    modelPathTemplate: '/v1beta/models/{model}:streamGenerateContent',
+  },
+  {
+    id: 'preset-glm-4.7',
+    name: 'GLM-4.7',
+    apiKey: '',
+    apiHost: 'open.bigmodel.cn',
+    apiPath: '/api/paas/v4/chat/completions',
+    model: 'glm-4.7',
+    authMethod: 'bearer',
+  },
+  {
+    id: 'preset-qwen-plus',
+    name: 'Qwen Plus',
+    apiKey: '',
+    apiHost: 'dashscope.aliyuncs.com',
+    apiPath: '/api/v1/services/aigc/text-generation/generation',
+    model: 'qwen-plus',
+    authMethod: 'bearer',
+  },
+  {
+    id: 'preset-grok-4.1-fast',
+    name: 'Grok 4.1 Fast',
+    apiKey: '',
+    apiHost: 'api.x.ai',
+    apiPath: '/v1/chat/completions',
+    model: 'grok-4.1-fast',
+    authMethod: 'bearer',
+  },
+  {
+    id: 'preset-kimi-k2-turbo',
+    name: 'Kimi K2 Turbo',
+    apiKey: '',
+    apiHost: 'api.moonshot.cn',
+    apiPath: '/v1/chat/completions',
+    model: 'kimi-k2-turbo-preview',
+    authMethod: 'bearer',
+  },
+  {
+    id: 'preset-hy-2.0-instruct',
+    name: 'HY 2.0 Instruct',
+    apiKey: '',
+    apiHost: '',
+    apiPath: '/v1/chat/completions',
+    model: 'hy-2.0-instruct',
+    authMethod: 'bearer',
+  },
+]
+
+const PRESET_CUSTOM_PROVIDER_IDS = new Set(PRESET_CUSTOM_PROVIDERS.map((provider) => provider.id))
+
+const buildCustomDefinition = (provider: CustomProviderConfig): ProviderDefinition => {
+  return {
+    ...CUSTOM_PROVIDER_TEMPLATE,
+    id: provider.id,
+    name: provider.name,
+    description: provider.apiHost
+      ? `${provider.apiHost}${provider.model ? ` · ${provider.model}` : ''}`
+      : CUSTOM_PROVIDER_TEMPLATE.description,
+    defaultHost: provider.apiHost || CUSTOM_PROVIDER_TEMPLATE.defaultHost,
+    defaultPath: provider.apiPath || CUSTOM_PROVIDER_TEMPLATE.defaultPath,
+    authMethod: provider.authMethod || CUSTOM_PROVIDER_TEMPLATE.authMethod,
+    authKeyName: provider.authKeyName || CUSTOM_PROVIDER_TEMPLATE.authKeyName || 'key',
+    requestFormat: provider.requestFormat || CUSTOM_PROVIDER_TEMPLATE.requestFormat,
+    modelPathTemplate: provider.modelPathTemplate || CUSTOM_PROVIDER_TEMPLATE.modelPathTemplate,
+    customHeaders: provider.customHeaders || CUSTOM_PROVIDER_TEMPLATE.customHeaders,
+    defaultModels:
+      provider.defaultModels && provider.defaultModels.length > 0
+        ? provider.defaultModels
+        : provider.model
+        ? [provider.model]
+        : CUSTOM_PROVIDER_TEMPLATE.defaultModels,
+    fields: CUSTOM_PROVIDER_TEMPLATE.fields.map((field) => {
+      if (field.name === 'apiHost') {
+        return { ...field, placeholder: provider.apiHost || field.placeholder }
+      }
+      if (field.name === 'apiPath') {
+        return { ...field, placeholder: provider.apiPath || field.placeholder }
+      }
+      if (field.name === 'model') {
+        return { ...field, placeholder: provider.model || field.placeholder }
+      }
+      return field
+    }),
+  }
+}
+
+const hasRequiredFields = (definition: ProviderDefinition, config: Record<string, any>) => {
+  return definition.fields
+    .filter((field) => field.required)
+    .every((field) => {
+      const value = config?.[field.name]
+      return value && typeof value === 'string' && value.trim().length > 0
+    })
+}
+
+const normalizeHost = (value: string) => {
+  if (!value) return ''
+  try {
+    const url = new URL(value.startsWith('http') ? value : `https://${value}`)
+    return url.host
+  } catch {
+    return value.replace(/^https?:\/\//, '').split('/')[0]
+  }
+}
+
+const ensureHostPermission = async (host?: string) => {
+  if (!host || !Browser.permissions?.request) {
+    return true
+  }
+  const cleanHost = normalizeHost(host)
+  if (!cleanHost) return true
+  const origins = [`https://${cleanHost}/*`, `http://${cleanHost}/*`]
+  const permission = { origins }
+  const hasPermission = await Browser.permissions.contains(permission as any)
+  if (hasPermission) return true
+  return Browser.permissions.request(permission as any)
+}
+
+const CustomProviderModal = ({
+  visible,
+  provider,
+  onClose,
+  onSave,
+}: {
   visible: boolean
-  provider?: CustomProviderConfig
+  provider?: CustomProviderConfig | null
   onClose: () => void
   onSave: (provider: CustomProviderConfig) => void
-}> = ({ visible, provider, onClose, onSave }) => {
+}) => {
   const [formData, setFormData] = useState<CustomProviderConfig>({
     id: '',
     name: '',
@@ -102,23 +259,23 @@ const CustomProviderModal: FC<{
     apiHost: '',
     apiPath: '/v1/chat/completions',
     model: '',
-    authMethod: 'bearer'
+    authMethod: 'bearer',
   })
 
   useEffect(() => {
     if (provider) {
       setFormData(provider)
-    } else {
-      setFormData({
-        id: `custom-${Date.now()}`,
-        name: '',
-        apiKey: '',
-        apiHost: '',
-        apiPath: '/v1/chat/completions',
-        model: '',
-        authMethod: 'bearer'
-      })
+      return
     }
+    setFormData({
+      id: `custom-${Date.now()}`,
+      name: '',
+      apiKey: '',
+      apiHost: '',
+      apiPath: '/v1/chat/completions',
+      model: '',
+      authMethod: 'bearer',
+    })
   }, [provider, visible])
 
   const handleSave = () => {
@@ -130,32 +287,38 @@ const CustomProviderModal: FC<{
   }
 
   return (
-    <Modal visible={visible} onClose={onClose} width="40rem">
-      <Modal.Title>{provider ? '编辑自定义提供商' : '添加自定义提供商'}</Modal.Title>
+    <Modal visible={visible} onClose={onClose} width="38rem">
+      <Modal.Title>{provider ? '编辑自定义服务' : '添加自定义服务'}</Modal.Title>
       <Modal.Content>
         <div className="glarity--flex glarity--flex-col glarity--gap-4">
           <div>
-            <Text small b>名称</Text>
+            <Text small b>
+              服务名称
+            </Text>
             <Input
               width="100%"
-              placeholder="例如：OpenRouter"
+              placeholder="例如：DeepSeek / OpenRouter"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             />
           </div>
-          
+
           <div>
-            <Text small b>API 域名</Text>
+            <Text small b>
+              API 域名
+            </Text>
             <Input
               width="100%"
-              placeholder="例如：api.openrouter.ai"
+              placeholder="例如：api.deepseek.com"
               value={formData.apiHost}
               onChange={(e) => setFormData({ ...formData, apiHost: e.target.value })}
             />
           </div>
-          
+
           <div>
-            <Text small b>API 路径</Text>
+            <Text small b>
+              API 路径
+            </Text>
             <Input
               width="100%"
               placeholder="/v1/chat/completions"
@@ -163,9 +326,11 @@ const CustomProviderModal: FC<{
               onChange={(e) => setFormData({ ...formData, apiPath: e.target.value })}
             />
           </div>
-          
+
           <div>
-            <Text small b>模型名称</Text>
+            <Text small b>
+              默认模型
+            </Text>
             <Input
               width="100%"
               placeholder="例如：deepseek-chat"
@@ -173,99 +338,306 @@ const CustomProviderModal: FC<{
               onChange={(e) => setFormData({ ...formData, model: e.target.value })}
             />
           </div>
-          
+
           <div>
-            <Text small b>认证方式</Text>
-            <Aselect
-              style={{ width: '100%' }}
+            <Text small b>
+              认证方式
+            </Text>
+            <NativeSelect
               value={formData.authMethod}
-              onChange={(v) => setFormData({ ...formData, authMethod: v as any })}
-            >
-              <Option value="bearer">Bearer Token (Authorization: Bearer)</Option>
-              <Option value="api-key">API Key Header</Option>
-              <Option value="x-api-key">x-api-key Header</Option>
-              <Option value="query-param">Query Parameter</Option>
-              <Option value="none">无需认证</Option>
-            </Aselect>
+              onChange={(value) => setFormData({ ...formData, authMethod: value as any })}
+              options={[
+                { value: 'bearer', label: 'Bearer Token' },
+                { value: 'api-key', label: 'API Key Header' },
+                { value: 'x-api-key', label: 'x-api-key Header' },
+                { value: 'query-param', label: 'Query Parameter' },
+                { value: 'none', label: '无需认证' },
+              ]}
+            />
           </div>
-          
+
           {formData.authMethod !== 'none' && (
             <div>
-              <Text small b>API KEY</Text>
-              <Input.Password
-                width="100%"
-                placeholder="sk-********"
-                value={formData.apiKey}
-                onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
-              />
+              <Text small b>
+                API KEY
+              </Text>
+            <Input
+              width="100%"
+              htmlType="password"
+              placeholder="sk-********"
+              value={formData.apiKey}
+              onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
+            />
             </div>
           )}
         </div>
       </Modal.Content>
-      <Modal.Action passive onClick={onClose}>取消</Modal.Action>
+      <Modal.Action passive onClick={onClose}>
+        取消
+      </Modal.Action>
       <Modal.Action onClick={handleSave}>保存</Modal.Action>
     </Modal>
   )
 }
 
-// Provider Configuration Form
-const ProviderConfigForm: FC<{
-  provider: ProviderDefinition
-  config: any
-  onChange: (config: any) => void
-  customModels: string
-  onCustomModelsChange: (value: string) => void
-}> = ({ provider, config, onChange, customModels, onCustomModelsChange }) => {
+const ProviderSelect = () => {
+  const { setToast } = useToasts()
+  const [loading, setLoading] = useState(true)
+  const [activeProvider, setActiveProvider] = useState<string>(ProviderType.GPT3)
+  const [selectedProvider, setSelectedProvider] = useState<string>(ProviderType.GPT3)
+  const [providerConfigs, setProviderConfigs] = useState<Record<string, any>>({})
+  const [customProviders, setCustomProviders] = useState<CustomProviderConfig[]>([])
+  const [customModels, setCustomModels] = useState<Record<string, string>>({})
+  const [searchValue, setSearchValue] = useState('')
+  const [customProviderModalVisible, setCustomProviderModalVisible] = useState(false)
+  const [editingCustomProvider, setEditingCustomProvider] = useState<CustomProviderConfig | null>(null)
+  const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<{success: boolean; message: string} | null>(null)
-  const [showAdvanced, setShowAdvanced] = useState(false)
-  const [useCustomModel, setUseCustomModel] = useState(false)
-  const [customModelValue, setCustomModelValue] = useState('')
-  const [modelSelectOpen, setModelSelectOpen] = useState(false)
-  
-  // Parse custom models
-  const { models: processedModels, displayNames } = useMemo(() => {
-    return parseCustomModels(customModels, provider.defaultModels)
-  }, [customModels, provider.defaultModels])
-  
-  // Update field value
-  const updateField = (fieldName: string, value: string) => {
-    onChange({ ...config, [fieldName]: value })
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [showSecrets, setShowSecrets] = useState(false)
+  const [useCustomModelInput, setUseCustomModelInput] = useState(false)
+  const [customModelInput, setCustomModelInput] = useState('')
+
+  const displayProviders = useMemo(() => [...BUILT_IN_LIST], [])
+  const normalizeCustomProviders = (value: unknown): CustomProviderConfig[] =>
+    normalizeArray<CustomProviderConfig>(value)
+  const mergePresetCustomProviders = (stored: CustomProviderConfig[]) => {
+    const storedMap = new Map(stored.map((provider) => [provider.id, provider]))
+    const presetsMissing = PRESET_CUSTOM_PROVIDERS.some(
+      (preset) => !storedMap.has(preset.id),
+    )
+    const mergedPresets = PRESET_CUSTOM_PROVIDERS.map(
+      (preset) => storedMap.get(preset.id) || preset,
+    )
+    const userProviders = stored.filter(
+      (provider) => !PRESET_CUSTOM_PROVIDER_IDS.has(provider.id),
+    )
+    return { merged: [...mergedPresets, ...userProviders], presetsMissing }
   }
-  
-  // Test connection
-  const testConnection = async () => {
+
+  useEffect(() => {
+    let mounted = true
+    Promise.all([getProviderConfigs(), getUserConfig()]).then(([providerData, userConfig]) => {
+      if (!mounted) return
+      let defaultProvider = providerData.provider || ProviderType.GPT3
+      if (defaultProvider === ProviderType.ChatGPT) {
+        defaultProvider = ProviderType.GPT3
+      }
+      const storedCustomProviders = normalizeCustomProviders(providerData.customProviders)
+      const { merged, presetsMissing } = mergePresetCustomProviders(storedCustomProviders)
+      const nextConfigs = { ...(providerData.configs || {}) }
+      let configsChanged = false
+      merged.forEach((provider) => {
+        if (!nextConfigs[provider.id]) {
+          nextConfigs[provider.id] = provider
+          configsChanged = true
+        }
+      })
+      setActiveProvider(defaultProvider)
+      setSelectedProvider(defaultProvider)
+      setProviderConfigs(nextConfigs)
+      setCustomProviders(merged)
+      setCustomModels(userConfig.customModels || {})
+      setLoading(false)
+      if (providerData.provider !== defaultProvider || presetsMissing || configsChanged) {
+        saveProviderConfigs(defaultProvider, nextConfigs, merged)
+      }
+    })
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (loading) return
+    const availableIds = new Set<string>()
+    displayProviders.forEach((provider) => availableIds.add(provider.id as string))
+    customProviders.forEach((provider) => availableIds.add(provider.id))
+    if (!availableIds.has(selectedProvider)) {
+      setSelectedProvider(ProviderType.GPT3)
+    }
+  }, [loading, selectedProvider, customProviders, displayProviders])
+
+  const customProviderIds = useMemo(
+    () => new Set(customProviders.map((provider) => provider.id)),
+    [customProviders],
+  )
+  const presetProviders = useMemo(
+    () => customProviders.filter((provider) => PRESET_CUSTOM_PROVIDER_IDS.has(provider.id)),
+    [customProviders],
+  )
+  const userCustomProviders = useMemo(
+    () => customProviders.filter((provider) => !PRESET_CUSTOM_PROVIDER_IDS.has(provider.id)),
+    [customProviders],
+  )
+
+  const selectedDefinition = useMemo(() => {
+    const builtIn = displayProviders.find((provider) => provider.id === selectedProvider)
+    if (builtIn) return builtIn
+    const custom = customProviders.find((provider) => provider.id === selectedProvider)
+    if (custom) return buildCustomDefinition(custom)
+    return undefined
+  }, [selectedProvider, customProviders, displayProviders])
+
+  const selectedConfig = providerConfigs[selectedProvider] || {}
+
+  const customModelsValue = customModels[selectedProvider] || ''
+  const { models: modelOptions, displayNames } = useMemo(() => {
+    if (!selectedDefinition) {
+      return { models: [], displayNames: {} }
+    }
+    return parseCustomModels(customModelsValue, selectedDefinition.defaultModels || [])
+  }, [customModelsValue, selectedDefinition])
+
+  useEffect(() => {
+    if (!selectedDefinition) return
+    const currentModel = selectedConfig.model || ''
+    const inList = currentModel && modelOptions.includes(currentModel)
+    setUseCustomModelInput(!!currentModel && !inList)
+    setCustomModelInput(currentModel)
+    setTestResult(null)
+  }, [selectedProvider, selectedDefinition, customModelsValue])
+
+  const updateConfig = (updates: Record<string, any>) => {
+    setProviderConfigs((prev) => ({
+      ...prev,
+      [selectedProvider]: {
+        ...(prev[selectedProvider] || {}),
+        ...updates,
+      },
+    }))
+
+    if (customProviderIds.has(selectedProvider)) {
+      setCustomProviders((prev) =>
+        prev.map((provider) =>
+          provider.id === selectedProvider ? { ...provider, ...updates } : provider,
+        ),
+      )
+    }
+  }
+
+  const handleSetDefault = async (providerId: string) => {
+    const isCustom = customProviderIds.has(providerId)
+    if (!isCustom && !SUPPORTED_PROVIDER_IDS.has(providerId as ProviderType)) {
+      setToast({ text: '该服务暂不支持作为默认模型', type: 'warning' })
+      return
+    }
+
+    const definition = displayProviders.find((provider) => provider.id === providerId)
+    const config = providerConfigs[providerId] || {}
+    const customDefinition = isCustom
+      ? buildCustomDefinition(config)
+      : definition
+
+    if (customDefinition && !hasRequiredFields(customDefinition, config)) {
+      setToast({ text: '请先填写必填配置后再设为默认', type: 'warning' })
+      return
+    }
+
+    if (!isCustom && definition) {
+      const host = config.apiHost || definition?.defaultHost
+      const granted = await ensureHostPermission(host)
+      if (!granted) {
+        setToast({ text: '未授予该服务的访问权限', type: 'warning' })
+        return
+      }
+    }
+
+    if (isCustom) {
+      const host = config.apiHost
+      const granted = await ensureHostPermission(host)
+      if (!granted) {
+        setToast({ text: '未授予该服务的访问权限', type: 'warning' })
+        return
+      }
+    }
+
+    setActiveProvider(providerId)
+    setSelectedProvider(providerId)
+    await saveProviderConfigs(providerId as ProviderType, providerConfigs, customProviders)
+    setToast({ text: '已设为默认服务', type: 'success' })
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      if (selectedDefinition) {
+        const host = selectedConfig.apiHost || selectedDefinition.defaultHost
+        const granted = await ensureHostPermission(host)
+        if (!granted) {
+          setToast({ text: '未授予该服务的访问权限', type: 'warning' })
+          setSaving(false)
+          return
+        }
+      }
+      await saveProviderConfigs(activeProvider as ProviderType, providerConfigs, customProviders)
+      await updateUserConfig({ customModels })
+      setToast({ text: '设置已保存', type: 'success' })
+    } catch (error) {
+      setToast({ text: '保存失败', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    if (!selectedDefinition) return
+    const host = selectedConfig.apiHost || selectedDefinition.defaultHost
+    const granted = await ensureHostPermission(host)
+    if (!granted) {
+      setToast({ text: '未授予该服务的访问权限', type: 'warning' })
+      return
+    }
     setTesting(true)
     setTestResult(null)
-    
+
     try {
-      const model = useCustomModel && customModelValue ? customModelValue : (config?.model || provider.defaultModels[0])
-      const url = buildRequestUrl(provider, config, model)
-      const headers = buildAuthHeaders(provider, config?.apiKey || '')
-      const body = buildRequestBody(provider, config, [
-        { role: 'user', content: '你好，这是一条测试消息。请回复"测试成功"。' }
-      ], { max_tokens: 10 })
-      
-      let finalUrl = url
-      
-      // Handle query param auth (like Gemini)
-      if (provider.authMethod === 'query-param' && provider.authKeyName && config?.apiKey) {
-        const separator = url.includes('?') ? '&' : '?'
-        finalUrl = `${url}${separator}${provider.authKeyName}=${encodeURIComponent(config.apiKey)}`
+      const model =
+        (useCustomModelInput && customModelInput) ||
+        selectedConfig.model ||
+        modelOptions[0] ||
+        selectedDefinition.defaultModels?.[0]
+
+      if (!model) {
+        throw new Error('模型不能为空')
       }
-      
+
+      const effectiveConfig = {
+        ...selectedConfig,
+        apiHost: selectedConfig.apiHost || selectedDefinition.defaultHost,
+        apiPath: selectedConfig.apiPath || selectedDefinition.defaultPath,
+        model,
+      }
+
+      const url = buildRequestUrl(selectedDefinition, effectiveConfig, model)
+      const headers = buildAuthHeaders(selectedDefinition, effectiveConfig.apiKey || '')
+      const body = buildRequestBody(
+        selectedDefinition,
+        effectiveConfig,
+        [{ role: 'user', content: '你好，这是一条测试消息。请回复"测试成功"。' }],
+        { max_tokens: 10 },
+      )
+
+      let finalUrl = url
+      if (
+        selectedDefinition.authMethod === 'query-param' &&
+        selectedDefinition.authKeyName &&
+        effectiveConfig.apiKey
+      ) {
+        const separator = finalUrl.includes('?') ? '&' : '?'
+        finalUrl = `${finalUrl}${separator}${selectedDefinition.authKeyName}=${encodeURIComponent(
+          effectiveConfig.apiKey,
+        )}`
+      }
+
       const response = await fetch(finalUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
       })
-      
-      if (response.ok || (response.status === 307 || response.status === 308)) {
-        // 307/308 are redirects which Gemini uses, that's OK
-        setTestResult({
-          success: true,
-          message: '连接成功'
-        })
+
+      if (response.ok || response.status === 307 || response.status === 308) {
+        setTestResult({ success: true, message: '连接成功' })
       } else {
         const errorText = await response.text()
         let errorMessage = `HTTP ${response.status}`
@@ -280,397 +652,677 @@ const ProviderConfigForm: FC<{
     } catch (error) {
       setTestResult({
         success: false,
-        message: error instanceof Error ? error.message : '连接失败'
+        message: error instanceof Error ? error.message : '连接失败',
       })
     } finally {
       setTesting(false)
     }
   }
-  
-  // Render field input
+
+  const handleSaveCustomProvider = async (provider: CustomProviderConfig) => {
+    await saveCustomProvider(provider)
+    setCustomProviders((prev) => {
+      const index = prev.findIndex((item) => item.id === provider.id)
+      if (index >= 0) {
+        return prev.map((item) => (item.id === provider.id ? provider : item))
+      }
+      return [...prev, provider]
+    })
+    setProviderConfigs((prev) => ({
+      ...prev,
+      [provider.id]: provider,
+    }))
+    setSelectedProvider(provider.id)
+    setToast({ text: '自定义服务已保存', type: 'success' })
+  }
+
+  const handleDeleteCustomProvider = async (providerId: string) => {
+    await deleteCustomProvider(providerId)
+    const nextCustomProviders = customProviders.filter((item) => item.id !== providerId)
+    setCustomProviders(nextCustomProviders)
+    setProviderConfigs((prev) => {
+      const next = { ...prev }
+      delete next[providerId]
+      return next
+    })
+    if (selectedProvider === providerId) {
+      setSelectedProvider(ProviderType.GPT3)
+    }
+    if (activeProvider === providerId) {
+      setActiveProvider(ProviderType.GPT3)
+      await saveProviderConfigs(ProviderType.GPT3, providerConfigs, nextCustomProviders)
+    }
+    setToast({ text: '自定义服务已删除', type: 'success' })
+  }
+
+  const filteredBuiltIns = useMemo(() => {
+    const keyword = searchValue.trim().toLowerCase()
+    if (!keyword) return displayProviders
+    return displayProviders.filter((provider) => {
+      return (
+        provider.name.toLowerCase().includes(keyword) ||
+        provider.description.toLowerCase().includes(keyword)
+      )
+    })
+  }, [searchValue, displayProviders])
+
+  const filteredPresets = useMemo(() => {
+    const keyword = searchValue.trim().toLowerCase()
+    if (!keyword) return presetProviders
+    return presetProviders.filter((provider) => {
+      return (
+        provider.name.toLowerCase().includes(keyword) ||
+        provider.apiHost?.toLowerCase().includes(keyword)
+      )
+    })
+  }, [searchValue, presetProviders])
+
+  const filteredCustoms = useMemo(() => {
+    const keyword = searchValue.trim().toLowerCase()
+    if (!keyword) return userCustomProviders
+    return userCustomProviders.filter((provider) => {
+      return (
+        provider.name.toLowerCase().includes(keyword) ||
+        provider.apiHost?.toLowerCase().includes(keyword)
+      )
+    })
+  }, [searchValue, userCustomProviders])
+
   const renderField = (field: ProviderField) => {
-    const value = config?.[field.name] || ''
+    const value = selectedConfig?.[field.name] || ''
     const isPassword = field.type === 'password'
-    
     return (
-      <div key={field.name} className="glarity--flex glarity--flex-col glarity--gap-1">
+      <div key={field.name} className="glarity--provider-form-row">
         <label className="glarity--text-sm glarity--font-medium">
           {field.label}
           {field.required && <span className="glarity--text-red-500 glarity--ml-1">*</span>}
         </label>
-        {isPassword ? (
-          <Input.Password
-            width="100%"
-            placeholder={field.placeholder}
-            value={value}
-            onChange={(e) => updateField(field.name, e.target.value)}
-          />
-        ) : (
-          <Input
-            width="100%"
-            type={field.type}
-            placeholder={field.placeholder}
-            value={value}
-            onChange={(e) => updateField(field.name, e.target.value)}
-          />
-        )}
+        <Input
+          width="100%"
+          htmlType={isPassword && !showSecrets ? 'password' : 'text'}
+          placeholder={field.placeholder}
+          value={value}
+          onChange={(e) => updateConfig({ [field.name]: e.target.value })}
+        />
         {field.description && (
-          <Text small className="glarity--text-gray-500">{field.description}</Text>
+          <Text small className="glarity--text-gray-500">
+            {field.description}
+          </Text>
         )}
       </div>
     )
   }
-  
-  return (
-    <div className="glarity--flex glarity--flex-col glarity--gap-4">
-      <Text className="glarity--text-gray-600">{provider.description}</Text>
-      
-      {/* Provider fields */}
-      <div className="glarity--flex glarity--flex-col glarity--gap-3">
-        {provider.fields.map(renderField)}
-      </div>
-      
-      {/* Model selection */}
-      <div className="glarity--flex glarity--flex-col glarity--gap-2">
-        <label className="glarity--text-sm glarity--font-medium">模型:</label>
-        
-        {!useCustomModel ? (
-          <div className="glarity--flex glarity--items-center glarity--gap-2">
-            <Aselect
-              style={{ width: '100%' }}
-              value={config?.model || provider.defaultModels[0]}
-              onChange={(v) => updateField('model', v as string)}
-              placeholder="选择模型"
-              open={modelSelectOpen}
-              onDropdownVisibleChange={setModelSelectOpen}
-            >
-              {processedModels.map((m) => (
-                <Option key={m} value={m}>
-                  {displayNames[m] || m}
-                </Option>
-              ))}
-            </Aselect>
-          </div>
-        ) : (
-          <Input
-            width="100%"
-            placeholder="输入自定义模型名称"
-            value={customModelValue}
-            onChange={(e) => setCustomModelValue(e.target.value)}
-          />
-        )}
-        
-        <div className="glarity--flex glarity--items-center glarity--gap-2 glarity--mt-1">
-          <input 
-            type="checkbox"
-            id={`custom-model-${provider.id}`}
-            checked={useCustomModel}
-            onChange={() => setUseCustomModel(!useCustomModel)}
-          />
-          <label htmlFor={`custom-model-${provider.id}`} className="glarity--text-sm glarity--cursor-pointer">
-            使用自定义模型名称
-          </label>
-        </div>
-      </div>
-      
-      {/* Custom models management */}
-      <div className="glarity--mt-2">
-        <Button 
-          auto 
-          scale={2/3} 
-          type="secondary" 
-          ghost
-          onClick={() => {}}
-        >
-          管理模型列表
-        </Button>
-      </div>
-      
-      {/* Advanced settings */}
-      <div className="glarity--mt-2">
-        <Collapse>
-          <Collapse.Item title="高级设置">
-            <div className="glarity--flex glarity--flex-col glarity--gap-2">
-              <Text small>自定义模型列表（支持高级语法）</Text>
-              <Input
-                width="100%"
-                placeholder="gpt-4o,gpt-4-turbo,+custom-model,-old-model"
-                value={customModels}
-                onChange={(e) => onCustomModelsChange(e.target.value)}
-              />
-              <Text small className="glarity--text-gray-500">
-                语法：模型名, +添加模型, -隐藏模型, 模型名=显示名
-              </Text>
-            </div>
-          </Collapse.Item>
-        </Collapse>
-      </div>
-      
-      {/* Test connection button */}
-      <div className="glarity--mt-4">
-        <Button
-          type={testResult?.success ? 'success' : testResult?.success === false ? 'error' : 'secondary'}
-          ghost={!testResult}
-          loading={testing}
-          onClick={testConnection}
-          className="glarity--w-full"
-        >
-          {testing ? '测试中...' : testResult ? (testResult.success ? '✓ 连接成功' : `× ${testResult.message}`) : '测试连接'}
-        </Button>
-      </div>
-      
-      {/* API Key link */}
-      {provider.apiKeyUrl && (
-        <Text small className="glarity--italic glarity--text-xs glarity--mt-2">
-          你可以在
-          <a href={provider.apiKeyUrl} target="_blank" rel="noreferrer" className="glarity--text-blue-500 glarity--mx-1">
-            这里
-          </a>
-          找到或创建你的 API 密钥
-        </Text>
-      )}
-    </div>
-  )
-}
 
-// Main ProviderSelect Component
-const ProviderSelect: FC<ProviderSelectProps> = ({ onProviderChange }) => {
-  const { data: savedConfigs, mutate } = useSWR('provider-configs', getProviderConfigs)
-  const [activeTab, setActiveTab] = useState<'builtin' | 'custom'>('builtin')
-  const [selectedProvider, setSelectedProvider] = useState<string>(ProviderType.GPT3)
-  const [customProviders, setCustomProviders] = useState<CustomProviderConfig[]>([])
-  const [providerConfigs, setProviderConfigs] = useState<Record<string, any>>({})
-  const [customModels, setCustomModels] = useState<Record<string, string>>({})
-  const [customProviderModalVisible, setCustomProviderModalVisible] = useState(false)
-  const [editingCustomProvider, setEditingCustomProvider] = useState<CustomProviderConfig | undefined>()
-  const [saveLoading, setSaveLoading] = useState(false)
-  const { setToast } = require('@geist-ui/core').useToasts()
-  
-  // Initialize from saved configs
-  useEffect(() => {
-    if (savedConfigs) {
-      setSelectedProvider(savedConfigs.provider)
-      setProviderConfigs(savedConfigs.configs || {})
-      setCustomProviders(savedConfigs.customProviders || [])
-      
-      // Load custom models from user config
-      getUserConfig().then(userConfig => {
-        setCustomModels(userConfig.customModels || {})
-      })
+  const handleApiUrlChange = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      updateConfig({ apiHost: '', apiPath: '' })
+      return
     }
-  }, [savedConfigs])
-  
-  // Get current provider definition
-  const currentProvider = useMemo(() => {
-    const isCustom = customProviders.some(p => p.id === selectedProvider)
-    if (isCustom) {
-      const customProvider = customProviders.find(p => p.id === selectedProvider)
-      if (customProvider) {
-        return {
-          ...CUSTOM_PROVIDER_TEMPLATE,
-          id: customProvider.id,
-          name: customProvider.name,
-          defaultHost: customProvider.apiHost,
-          defaultPath: customProvider.apiPath,
-          authMethod: customProvider.authMethod,
-          fields: CUSTOM_PROVIDER_TEMPLATE.fields.map(f => 
-            f.name === 'apiHost' ? { ...f, placeholder: customProvider.apiHost } :
-            f.name === 'apiPath' ? { ...f, placeholder: customProvider.apiPath } :
-            f.name === 'model' ? { ...f, placeholder: customProvider.model } :
-            f
-          )
-        }
-      }
-    }
-    return getProviderById(selectedProvider)
-  }, [selectedProvider, customProviders])
-  
-  // Handle provider selection
-  const handleSelectProvider = (providerId: string) => {
-    setSelectedProvider(providerId)
-    onProviderChange?.(providerId)
-  }
-  
-  // Handle config change for current provider
-  const handleConfigChange = (config: any) => {
-    setProviderConfigs(prev => ({
-      ...prev,
-      [selectedProvider]: config
-    }))
-  }
-  
-  // Handle custom models change
-  const handleCustomModelsChange = (value: string) => {
-    setCustomModels(prev => ({
-      ...prev,
-      [selectedProvider]: value
-    }))
-  }
-  
-  // Save custom provider
-  const handleSaveCustomProvider = async (provider: CustomProviderConfig) => {
-    await saveCustomProvider(provider)
-    setCustomProviders(prev => {
-      const index = prev.findIndex(p => p.id === provider.id)
-      if (index >= 0) {
-        return prev.map(p => p.id === provider.id ? provider : p)
-      }
-      return [...prev, provider]
-    })
-    setToast({ text: '自定义提供商已保存', type: 'success' })
-    mutate()
-  }
-  
-  // Delete custom provider
-  const handleDeleteCustomProvider = async (providerId: string) => {
-    await deleteCustomProvider(providerId)
-    setCustomProviders(prev => prev.filter(p => p.id !== providerId))
-    if (selectedProvider === providerId) {
-      setSelectedProvider(ProviderType.GPT3)
-    }
-    setToast({ text: '自定义提供商已删除', type: 'success' })
-    mutate()
-  }
-  
-  // Save all configurations
-  const handleSave = async () => {
-    setSaveLoading(true)
+
     try {
-      // Save provider configs
-      await saveProviderConfigs(
-        selectedProvider as ProviderType,
-        providerConfigs,
-        customProviders
-      )
-      
-      // Save custom models
-      await updateUserConfig({ customModels })
-      
-      setToast({ text: '设置已保存', type: 'success' })
-      mutate()
+      const url = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`)
+      updateConfig({ apiHost: url.host, apiPath: `${url.pathname}${url.search}` || '/' })
     } catch (error) {
-      setToast({ text: '保存失败', type: 'error' })
-    } finally {
-      setSaveLoading(false)
+      const [host, ...pathParts] = trimmed.replace(/^https?:\/\//, '').split('/')
+      updateConfig({ apiHost: host, apiPath: `/${pathParts.join('/')}` })
     }
   }
-  
+
+  const getApiUrlValue = () => {
+    if (!selectedDefinition) return ''
+    const host = selectedConfig.apiHost || selectedDefinition.defaultHost
+    const path = selectedConfig.apiPath || selectedDefinition.defaultPath
+    if (!host) return ''
+    return `https://${host}${path || ''}`
+  }
+
+  if (loading) {
+    return (
+      <div className="glarity--provider-empty">
+        <Text>加载配置中...</Text>
+      </div>
+    )
+  }
+
+  const isCustomProvider = customProviderIds.has(selectedProvider)
+  const isPresetProvider = PRESET_CUSTOM_PROVIDER_IDS.has(selectedProvider)
+  const hasApiHost = selectedDefinition?.fields.some((field) => field.name === 'apiHost')
+  const hasApiPath = selectedDefinition?.fields.some((field) => field.name === 'apiPath')
+  const showApiUrlInput = Boolean(hasApiHost && hasApiPath)
+  const hasPasswordField = selectedDefinition?.fields.some((field) => field.type === 'password')
+
   return (
-    <div className="glarity--flex glarity--flex-col glarity--gap-4">
-      <Tabs activeKey={activeTab} onChange={(v) => setActiveTab(v as any)}>
-        <TabPane 
-          tab={<span><ApiOutlined /> 内置提供商</span>} 
-          key="builtin"
-        >
-          <div className="glarity--grid glarity--grid-cols-1 glarity--md:grid-cols-2 glarity--gap-3 glarity--mb-6">
-            {BUILT_IN_PROVIDERS.map(provider => (
-              <ProviderCard
-                key={provider.id}
-                provider={provider}
-                isActive={selectedProvider === provider.id}
-                onClick={() => handleSelectProvider(provider.id as string)}
-                config={providerConfigs[provider.id]}
-              />
-            ))}
-          </div>
-          
-          {currentProvider && BUILT_IN_PROVIDERS.some(p => p.id === selectedProvider) && (
-            <Card className="glarity--mt-4">
-              <ProviderConfigForm
-                provider={currentProvider}
-                config={providerConfigs[selectedProvider] || {}}
-                onChange={handleConfigChange}
-                customModels={customModels[selectedProvider] || ''}
-                onCustomModelsChange={handleCustomModelsChange}
-              />
-            </Card>
-          )}
-        </TabPane>
-        
-        <TabPane 
-          tab={<span><SettingOutlined /> 自定义提供商</span>} 
-          key="custom"
-        >
-          <div className="glarity--mb-4">
-            <Button 
-              type="secondary" 
-              icon={<PlusOutlined />}
-              onClick={() => {
-                setEditingCustomProvider(undefined)
-                setCustomProviderModalVisible(true)
-              }}
-            >
-              添加自定义提供商
-            </Button>
-          </div>
-          
-          {customProviders.length === 0 ? (
-            <div className="glarity--text-center glarity--py-8 glarity--text-gray-500">
-              <Text>暂无自定义提供商</Text>
-              <Text small className="glarity--mt-2 glarity--block">
-                添加 OpenRouter、DeepSeek 等兼容 OpenAI API 格式的服务
-              </Text>
-            </div>
-          ) : (
-            <div className="glarity--grid glarity--grid-cols-1 glarity--gap-3 glarity--mb-6">
-              {customProviders.map(provider => (
-                <div key={provider.id} className="glarity--relative">
-                  <ProviderCard
-                    provider={{
-                      ...CUSTOM_PROVIDER_TEMPLATE,
-                      id: provider.id,
-                      name: provider.name,
-                      description: `${provider.apiHost} - ${provider.model}`
-                    }}
-                    isActive={selectedProvider === provider.id}
-                    onClick={() => handleSelectProvider(provider.id)}
-                    config={provider}
-                  />
-                  <div className="glarity--absolute glarity--top-2 glarity--right-2">
-                    <Button
-                      auto
-                      scale={1/2}
-                      type="error"
-                      ghost
-                      icon={<DeleteOutlined />}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDeleteCustomProvider(provider.id)
-                      }}
-                    />
+    <div className="glarity--provider-layout">
+      <div className="glarity--provider-list">
+        <div className="glarity--provider-list__header">
+          <Text h4 className="glarity--m-0">
+            服务列表
+          </Text>
+          <Button
+            auto
+            scale={0.8}
+            type="secondary"
+            onClick={() => {
+              setEditingCustomProvider(null)
+              setCustomProviderModalVisible(true)
+            }}
+          >
+            添加自定义服务
+          </Button>
+        </div>
+
+        <Input
+          width="100%"
+          placeholder="搜索服务"
+          value={searchValue}
+          onChange={(e) => setSearchValue(e.target.value)}
+        />
+
+        <div className="glarity--provider-group">
+          <div className="glarity--provider-group-title">内置服务</div>
+          {filteredBuiltIns.map((provider) => {
+            const isActive = activeProvider === provider.id
+            const isSelected = selectedProvider === provider.id
+            const isConfigured = hasRequiredFields(provider, providerConfigs[provider.id as string] || {})
+            const isSupported = SUPPORTED_PROVIDER_IDS.has(provider.id as ProviderType)
+
+            return (
+              <div
+                key={provider.id as string}
+                className={`glarity--provider-item ${isSelected ? 'active' : ''} ${
+                  !isSupported ? 'disabled' : ''
+                }`}
+                onClick={() => setSelectedProvider(provider.id as string)}
+              >
+                <div className="glarity--provider-item__meta">
+                  <div className="glarity--provider-item__title">{provider.name}</div>
+                  <div className="glarity--provider-item__desc">{provider.description}</div>
+                  <div className="glarity--provider-item__badges">
+                    {isActive && <span className="glarity--badge glarity--badge--active">默认</span>}
+                    {isConfigured && (
+                      <span className="glarity--badge glarity--badge--configured">已配置</span>
+                    )}
+                    {!isConfigured && isSupported && <span className="glarity--badge">需配置</span>}
+                    {!isSupported && <span className="glarity--badge">暂未支持</span>}
                   </div>
                 </div>
-              ))}
+                <Toggle
+                  checked={isActive}
+                  disabled={!isSupported}
+                  onChange={() => handleSetDefault(provider.id as string)}
+                />
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="glarity--provider-group">
+          <div className="glarity--provider-group-title">高级模型</div>
+          {filteredPresets.length === 0 ? (
+            <div className="glarity--provider-empty">
+              <Text small>暂无匹配服务</Text>
             </div>
+          ) : (
+            filteredPresets.map((provider) => {
+              const definition = buildCustomDefinition(provider)
+              const isSelected = selectedProvider === provider.id
+              const isActive = activeProvider === provider.id
+              const isConfigured = hasRequiredFields(
+                definition,
+                providerConfigs[provider.id] || provider,
+              )
+              return (
+                <div
+                  key={provider.id}
+                  className={`glarity--provider-item ${isSelected ? 'active' : ''}`}
+                  onClick={() => setSelectedProvider(provider.id)}
+                >
+                  <div className="glarity--provider-item__meta">
+                    <div className="glarity--provider-item__title">{provider.name}</div>
+                    <div className="glarity--provider-item__desc">
+                      {provider.apiHost || definition.description}
+                    </div>
+                    <div className="glarity--provider-item__badges">
+                      {isActive && (
+                        <span className="glarity--badge glarity--badge--active">默认</span>
+                      )}
+                      {isConfigured && (
+                        <span className="glarity--badge glarity--badge--configured">已配置</span>
+                      )}
+                      {!isConfigured && <span className="glarity--badge">需配置</span>}
+                      <span className="glarity--badge glarity--badge--preset">预置</span>
+                    </div>
+                  </div>
+                  <Toggle checked={isActive} onChange={() => handleSetDefault(provider.id)} />
+                </div>
+              )
+            })
           )}
-          
-          {currentProvider && customProviders.some(p => p.id === selectedProvider) && (
-            <Card className="glarity--mt-4">
-              <ProviderConfigForm
-                provider={currentProvider}
-                config={providerConfigs[selectedProvider] || {}}
-                onChange={handleConfigChange}
-                customModels={customModels[selectedProvider] || ''}
-                onCustomModelsChange={handleCustomModelsChange}
-              />
-            </Card>
+        </div>
+
+        <div className="glarity--provider-group">
+          <div className="glarity--provider-group-title">自定义服务</div>
+          {filteredCustoms.length === 0 ? (
+            <div className="glarity--provider-empty">
+              <Text small>暂无自定义服务</Text>
+            </div>
+          ) : (
+            filteredCustoms.map((provider) => {
+              const definition = buildCustomDefinition(provider)
+              const isSelected = selectedProvider === provider.id
+              const isActive = activeProvider === provider.id
+              const isConfigured = hasRequiredFields(
+                definition,
+                providerConfigs[provider.id] || provider,
+              )
+              return (
+                <div
+                  key={provider.id}
+                  className={`glarity--provider-item ${isSelected ? 'active' : ''}`}
+                  onClick={() => setSelectedProvider(provider.id)}
+                >
+                  <div className="glarity--provider-item__meta">
+                    <div className="glarity--provider-item__title">{provider.name}</div>
+                    <div className="glarity--provider-item__desc">{provider.apiHost}</div>
+                    <div className="glarity--provider-item__badges">
+                      {isActive && <span className="glarity--badge glarity--badge--active">默认</span>}
+                      {isConfigured && (
+                        <span className="glarity--badge glarity--badge--configured">已配置</span>
+                      )}
+                      {!isConfigured && <span className="glarity--badge">需配置</span>}
+                      <span className="glarity--badge">实验性</span>
+                    </div>
+                  </div>
+                  <Toggle checked={isActive} onChange={() => handleSetDefault(provider.id)} />
+                </div>
+              )
+            })
           )}
-        </TabPane>
-      </Tabs>
-      
-      {/* Save button */}
-      <div className="glarity--flex glarity--justify-end glarity--mt-4">
-        <Button
-          type="success"
-          loading={saveLoading}
-          onClick={handleSave}
-          icon={<CheckCircleOutlined />}
-        >
-          保存设置
-        </Button>
+        </div>
       </div>
-      
-      {/* Custom provider modal */}
+
+      <div className="glarity--provider-detail" key={selectedProvider}>
+        {!selectedDefinition ? (
+          <div className="glarity--provider-empty">
+            <Text>请选择一个服务进行配置</Text>
+          </div>
+        ) : (
+          <>
+            <div className="glarity--provider-detail__header">
+              <div>
+                <Text h3 className="glarity--m-0">
+                  {selectedDefinition.name}
+                </Text>
+                <Text small className="glarity--text-gray-500">
+                  {selectedDefinition.description}
+                </Text>
+              </div>
+              <div className="glarity--provider-actions">
+                {customProviderIds.has(selectedProvider) && (
+                  <>
+                    <Button
+                      auto
+                      scale={0.8}
+                      type="secondary"
+                      onClick={() => {
+                        const customProvider = customProviders.find(
+                          (provider) => provider.id === selectedProvider,
+                        )
+                        setEditingCustomProvider(customProvider || null)
+                        setCustomProviderModalVisible(true)
+                      }}
+                    >
+                      编辑服务
+                      </Button>
+                    {!isPresetProvider && (
+                      <Button
+                        auto
+                        scale={0.8}
+                        type="error"
+                        ghost
+                        onClick={() => handleDeleteCustomProvider(selectedProvider)}
+                      >
+                        删除
+                      </Button>
+                    )}
+                  </>
+                )}
+                <Button
+                  auto
+                  scale={0.9}
+                  type={testResult?.success ? 'success' : 'secondary'}
+                  ghost={!testResult}
+                  loading={testing}
+                  onClick={handleTestConnection}
+                  disabled={false}
+                >
+                  {testing
+                    ? '测试中...'
+                    : testResult
+                    ? testResult.success
+                      ? '连接成功'
+                      : '连接失败'
+                    : '测试连接'}
+                </Button>
+                <Button auto scale={0.9} type="success" loading={saving} onClick={handleSave}>
+                  保存设置
+                </Button>
+              </div>
+            </div>
+
+            <div className="glarity--provider-form">
+              {isCustomProvider && (
+                <Text small className="glarity--text-yellow-600">
+                  自定义服务可设为默认，请确认 API 与 OpenAI 兼容并已授予访问权限。
+                </Text>
+              )}
+              {isCustomProvider ? (
+                <>
+                  <div className="glarity--provider-form-row">
+                    <label className="glarity--text-sm glarity--font-medium">自定义服务名称</label>
+                    <Input
+                      width="100%"
+                      placeholder="例如：Deepseek"
+                      value={selectedConfig.name || ''}
+                      onChange={(e) => updateConfig({ name: e.target.value })}
+                    />
+                  </div>
+
+                  <div className="glarity--provider-form-row">
+                    <label className="glarity--text-sm glarity--font-medium">APIKEY</label>
+                    <Input
+                      width="100%"
+                      htmlType={showSecrets ? 'text' : 'password'}
+                      placeholder="sk-********"
+                      value={selectedConfig.apiKey || ''}
+                      onChange={(e) => updateConfig({ apiKey: e.target.value })}
+                    />
+                  </div>
+                  <div className="glarity--provider-inline">
+                    <input
+                      type="checkbox"
+                      id="glarity-show-secrets"
+                      checked={showSecrets}
+                      onChange={(e) => setShowSecrets(e.currentTarget.checked)}
+                    />
+                    <label htmlFor="glarity-show-secrets">显示密码</label>
+                  </div>
+
+                  {showApiUrlInput && (
+                    <div className="glarity--provider-form-row">
+                      <label className="glarity--text-sm glarity--font-medium">API 接口地址</label>
+                      <Input
+                        width="100%"
+                        placeholder={`https://${selectedDefinition.defaultHost}${selectedDefinition.defaultPath}`}
+                        value={getApiUrlValue()}
+                        onChange={(e) => handleApiUrlChange(e.target.value)}
+                      />
+                      <Text small className="glarity--text-gray-500">
+                        支持完整 URL 或仅填写域名 + 路径
+                      </Text>
+                    </div>
+                  )}
+
+                  <div className="glarity--provider-form-row">
+                    <label className="glarity--text-sm glarity--font-medium">模型</label>
+                    {!useCustomModelInput && modelOptions.length > 0 ? (
+                      <NativeSelect
+                        value={selectedConfig.model || modelOptions[0]}
+                        onChange={(value) => updateConfig({ model: value })}
+                        options={modelOptions.map((model) => ({
+                          value: model,
+                          label: displayNames[model] || model,
+                        }))}
+                      />
+                    ) : (
+                      <Input
+                        width="100%"
+                        placeholder="输入自定义模型名称"
+                        value={customModelInput}
+                        onChange={(e) => {
+                          setCustomModelInput(e.target.value)
+                          updateConfig({ model: e.target.value })
+                        }}
+                      />
+                    )}
+
+                    <div className="glarity--provider-inline glarity--mt-1">
+                      <input
+                        type="checkbox"
+                        id="glarity-use-custom-model"
+                        checked={useCustomModelInput}
+                        onChange={(e) => {
+                          const next = e.currentTarget.checked
+                          setUseCustomModelInput(next)
+                          if (!next && modelOptions.length > 0) {
+                            updateConfig({ model: modelOptions[0] })
+                          }
+                        }}
+                      />
+                      <label htmlFor="glarity-use-custom-model">输入自定义模型名称</label>
+                    </div>
+                  </div>
+
+                  <Collapse>
+                    <Collapse.Item title="高级设置">
+                      <div className="glarity--provider-form-row">
+                        <label className="glarity--text-sm glarity--font-medium">认证方式</label>
+                        <NativeSelect
+                          value={selectedConfig.authMethod || 'bearer'}
+                          onChange={(value) => updateConfig({ authMethod: value })}
+                          options={[
+                            { value: 'bearer', label: 'Bearer Token' },
+                            { value: 'api-key', label: 'API Key Header' },
+                            { value: 'x-api-key', label: 'x-api-key Header' },
+                            { value: 'query-param', label: 'Query Parameter' },
+                            { value: 'none', label: '无需认证' },
+                          ]}
+                        />
+                      </div>
+
+                      {(selectedConfig.authMethod || 'bearer') === 'query-param' && (
+                        <div className="glarity--provider-form-row">
+                          <label className="glarity--text-sm glarity--font-medium">
+                            Query 参数名
+                          </label>
+                          <Input
+                            width="100%"
+                            placeholder="key"
+                            value={selectedConfig.authKeyName || 'key'}
+                            onChange={(e) => updateConfig({ authKeyName: e.target.value })}
+                          />
+                        </div>
+                      )}
+
+                      {showApiUrlInput && (
+                        <div className="glarity--provider-form-row">
+                          <label className="glarity--text-sm glarity--font-medium">API 主机</label>
+                          <Input
+                            width="100%"
+                            placeholder={selectedDefinition.defaultHost}
+                            value={selectedConfig.apiHost || ''}
+                            onChange={(e) => updateConfig({ apiHost: e.target.value })}
+                          />
+                        </div>
+                      )}
+
+                      {showApiUrlInput && (
+                        <div className="glarity--provider-form-row">
+                          <label className="glarity--text-sm glarity--font-medium">API 路径</label>
+                          <Input
+                            width="100%"
+                            placeholder={selectedDefinition.defaultPath}
+                            value={selectedConfig.apiPath || ''}
+                            onChange={(e) => updateConfig({ apiPath: e.target.value })}
+                          />
+                        </div>
+                      )}
+
+                      <div className="glarity--provider-form-row">
+                        <label className="glarity--text-sm glarity--font-medium">
+                          自定义模型列表
+                        </label>
+                        <Input
+                          width="100%"
+                          placeholder="gpt-5.2,gpt-4o,+custom-model,-old-model"
+                          value={customModelsValue}
+                          onChange={(e) =>
+                            setCustomModels((prev) => ({
+                              ...prev,
+                              [selectedProvider]: e.target.value,
+                            }))
+                          }
+                        />
+                        <Text small className="glarity--text-gray-500">
+                          语法：模型名，+添加模型，-隐藏模型，model=显示名
+                        </Text>
+                      </div>
+                    </Collapse.Item>
+                  </Collapse>
+                </>
+              ) : (
+                <>
+                  {selectedDefinition.apiKeyUrl && (
+                    <Text small className="glarity--text-gray-500">
+                      API Key 获取地址：
+                      <a href={selectedDefinition.apiKeyUrl} target="_blank" rel="noreferrer">
+                        {selectedDefinition.apiKeyUrl}
+                      </a>
+                    </Text>
+                  )}
+
+                  {showApiUrlInput && (
+                    <div className="glarity--provider-form-row">
+                      <label className="glarity--text-sm glarity--font-medium">API 接口地址</label>
+                      <Input
+                        width="100%"
+                        placeholder={`https://${selectedDefinition.defaultHost}${selectedDefinition.defaultPath}`}
+                        value={getApiUrlValue()}
+                        onChange={(e) => handleApiUrlChange(e.target.value)}
+                      />
+                      <Text small className="glarity--text-gray-500">
+                        支持完整 URL 或仅填写域名 + 路径
+                      </Text>
+                    </div>
+                  )}
+
+                  {selectedDefinition.fields
+                    .filter((field) => field.name !== 'model')
+                    .filter((field) => {
+                      if (!showApiUrlInput) return true
+                      return field.name !== 'apiHost' && field.name !== 'apiPath'
+                    })
+                    .map(renderField)}
+
+                  {hasPasswordField && (
+                    <div className="glarity--provider-inline">
+                      <input
+                        type="checkbox"
+                        id="glarity-show-secrets"
+                        checked={showSecrets}
+                        onChange={(e) => setShowSecrets(e.currentTarget.checked)}
+                      />
+                      <label htmlFor="glarity-show-secrets">显示密钥</label>
+                    </div>
+                  )}
+
+                  <div className="glarity--provider-form-row">
+                    <label className="glarity--text-sm glarity--font-medium">模型</label>
+                    {!useCustomModelInput && modelOptions.length > 0 ? (
+                      <NativeSelect
+                        value={selectedConfig.model || modelOptions[0]}
+                        onChange={(value) => updateConfig({ model: value })}
+                        options={modelOptions.map((model) => ({
+                          value: model,
+                          label: displayNames[model] || model,
+                        }))}
+                      />
+                    ) : (
+                      <Input
+                        width="100%"
+                        placeholder="输入自定义模型名称"
+                        value={customModelInput}
+                        onChange={(e) => {
+                          setCustomModelInput(e.target.value)
+                          updateConfig({ model: e.target.value })
+                        }}
+                      />
+                    )}
+
+                    <div className="glarity--provider-inline glarity--mt-1">
+                      <input
+                        type="checkbox"
+                        id="glarity-use-custom-model"
+                        checked={useCustomModelInput}
+                        onChange={(e) => {
+                          const next = e.currentTarget.checked
+                          setUseCustomModelInput(next)
+                          if (!next && modelOptions.length > 0) {
+                            updateConfig({ model: modelOptions[0] })
+                          }
+                        }}
+                      />
+                      <label htmlFor="glarity-use-custom-model">输入自定义模型名称</label>
+                    </div>
+                  </div>
+
+                  <Collapse>
+                    <Collapse.Item title="高级设置">
+                      {showApiUrlInput && (
+                        <div className="glarity--provider-form-row">
+                          <label className="glarity--text-sm glarity--font-medium">API 主机</label>
+                          <Input
+                            width="100%"
+                            placeholder={selectedDefinition.defaultHost}
+                            value={selectedConfig.apiHost || ''}
+                            onChange={(e) => updateConfig({ apiHost: e.target.value })}
+                          />
+                        </div>
+                      )}
+
+                      {showApiUrlInput && (
+                        <div className="glarity--provider-form-row">
+                          <label className="glarity--text-sm glarity--font-medium">API 路径</label>
+                          <Input
+                            width="100%"
+                            placeholder={selectedDefinition.defaultPath}
+                            value={selectedConfig.apiPath || ''}
+                            onChange={(e) => updateConfig({ apiPath: e.target.value })}
+                          />
+                        </div>
+                      )}
+
+                      {modelOptions.length > 0 && (
+                        <div className="glarity--provider-form-row">
+                          <label className="glarity--text-sm glarity--font-medium">
+                            自定义模型列表
+                          </label>
+                          <Input
+                            width="100%"
+                            placeholder="gpt-5.2,gpt-4o,+custom-model,-old-model"
+                            value={customModelsValue}
+                            onChange={(e) =>
+                              setCustomModels((prev) => ({
+                                ...prev,
+                                [selectedProvider]: e.target.value,
+                              }))
+                            }
+                          />
+                          <Text small className="glarity--text-gray-500">
+                            语法：模型名，+添加模型，-隐藏模型，model=显示名
+                          </Text>
+                        </div>
+                      )}
+                    </Collapse.Item>
+                  </Collapse>
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
       <CustomProviderModal
         visible={customProviderModalVisible}
         provider={editingCustomProvider}

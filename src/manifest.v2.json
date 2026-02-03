@@ -16,6 +16,10 @@
     "activeTab",
     "tabs"
   ],
+  "optional_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "background": {
     "scripts": [
       "background.js"

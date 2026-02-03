@@ -58,7 +58,7 @@ export const BUILT_IN_PROVIDERS: ProviderDefinition[] = [
     name: 'OpenAI',
     description: 'OpenAI官方API，更稳定，按使用量收费',
     website: 'https://openai.com',
-    apiKeyUrl: 'https://platform.openai.com/account/api-keys',
+    apiKeyUrl: 'https://platform.openai.com/api-keys',
     defaultHost: 'api.openai.com',
     defaultPath: '/v1/chat/completions',
     authMethod: 'bearer',
@@ -68,7 +68,20 @@ export const BUILT_IN_PROVIDERS: ProviderDefinition[] = [
       { name: 'apiHost', label: 'API主机', type: 'text', placeholder: 'api.openai.com', required: false, description: '可选，用于第三方兼容服务' },
       { name: 'apiPath', label: 'API路径', type: 'text', placeholder: '/v1/chat/completions', required: false }
     ],
-    defaultModels: ['gpt-4o', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo', 'gpt-4o-mini']
+    defaultModels: [
+      'gpt-5.2',
+      'gpt-5.2-pro',
+      'gpt-5.2-codex',
+      'gpt-5.2-chat-latest',
+      'gpt-5-mini',
+      'gpt-5-nano',
+      'gpt-5',
+      'gpt-4.1',
+      'gpt-4.1-mini',
+      'gpt-4.1-nano',
+      'gpt-4o',
+      'gpt-4o-mini'
+    ]
   },
   
   {
@@ -89,7 +102,15 @@ export const BUILT_IN_PROVIDERS: ProviderDefinition[] = [
       { name: 'apiHost', label: 'API主机', type: 'text', placeholder: 'api.anthropic.com', required: false },
       { name: 'apiPath', label: 'API路径', type: 'text', placeholder: '/v1/messages', required: false }
     ],
-    defaultModels: ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-sonnet-20240229', 'claude-3-haiku-20240307']
+    defaultModels: [
+      'claude-opus-4-5',
+      'claude-sonnet-4-5',
+      'claude-haiku-4-5',
+      'claude-opus-4-5-20251101',
+      'claude-opus-4-1-20250805',
+      'claude-opus-4-20250514',
+      'claude-sonnet-4-20250514'
+    ]
   },
   
   {
@@ -108,7 +129,13 @@ export const BUILT_IN_PROVIDERS: ProviderDefinition[] = [
       { name: 'apiKey', label: 'API KEY', type: 'password', placeholder: 'AIzaSy*******', required: true },
       { name: 'apiHost', label: 'API主机', type: 'text', placeholder: 'generativelanguage.googleapis.com', required: false }
     ],
-    defaultModels: ['gemini-2.0-flash-exp', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-pro'],
+    defaultModels: [
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gemini-3-pro-preview',
+      'gemini-2.5-flash-lite-preview-06-17',
+      'gemini-2.0-flash-lite'
+    ],
     transformRequest: (body, config) => ({
       contents: [{ parts: [{ text: body.messages?.[0]?.content || '' }] }],
       generationConfig: { maxOutputTokens: body.max_tokens || 4000 }

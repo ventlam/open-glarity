@@ -125,8 +125,12 @@ export interface CustomProviderConfig {
   apiHost: string
   apiPath: string
   model: string
+  defaultModels?: string[]
   authMethod: 'bearer' | 'api-key' | 'query-param' | 'x-api-key' | 'none'
+  authKeyName?: string
   customHeaders?: Record<string, string>
+  requestFormat?: 'openai' | 'anthropic' | 'gemini' | 'ollama' | 'custom'
+  modelPathTemplate?: string
 }
 
 // Provider configuration with dynamic fields
@@ -236,7 +240,7 @@ export interface ProviderConfigs {
 }
 
 export async function getProviderConfigs(): Promise<ProviderConfigs> {
-  const { provider = ProviderType.ChatGPT } = await Browser.storage.local.get('provider')
+  const { provider = ProviderType.GPT3 } = await Browser.storage.local.get('provider')
   
   // 创建一个配置对象
   let configs: ProviderConfigs['configs'] = {
@@ -276,7 +280,12 @@ export async function getProviderConfigs(): Promise<ProviderConfigs> {
   }
 
   // Load custom providers
-  const { customProviders = [] } = await Browser.storage.local.get('customProviders')
+  const { customProviders: storedCustomProviders } = await Browser.storage.local.get('customProviders')
+  const customProviders = Array.isArray(storedCustomProviders)
+    ? storedCustomProviders
+    : storedCustomProviders && typeof storedCustomProviders === 'object'
+    ? Object.values(storedCustomProviders)
+    : []
   
   // Add custom provider configs
   for (const customProvider of customProviders) {
@@ -307,12 +316,14 @@ export async function saveProviderConfigs(
     }
   });
   
+  const normalizedCustomProviders = Array.isArray(customProviders) ? customProviders : [];
+
   // 保存自定义提供商配置
-  if (customProviders) {
-    saveObj['customProviders'] = customProviders;
+  if (customProviders !== undefined) {
+    saveObj['customProviders'] = normalizedCustomProviders;
     
     // 同时保存每个自定义提供商的独立配置（便于快速访问）
-    customProviders.forEach(customProvider => {
+    normalizedCustomProviders.forEach(customProvider => {
       if (customProvider && customProvider.id) {
         saveObj[`provider:${customProvider.id}`] = customProvider;
       }
@@ -324,7 +335,12 @@ export async function saveProviderConfigs(
 
 // Helper function to save a single custom provider
 export async function saveCustomProvider(provider: CustomProviderConfig): Promise<void> {
-  const { customProviders = [] } = await Browser.storage.local.get('customProviders');
+  const { customProviders: storedCustomProviders } = await Browser.storage.local.get('customProviders');
+  const customProviders = Array.isArray(storedCustomProviders)
+    ? storedCustomProviders
+    : storedCustomProviders && typeof storedCustomProviders === 'object'
+    ? Object.values(storedCustomProviders)
+    : [];
   
   // Find and update or add new
   const index = customProviders.findIndex((p: CustomProviderConfig) => p.id === provider.id);
@@ -342,7 +358,12 @@ export async function saveCustomProvider(provider: CustomProviderConfig): Promis
 
 // Helper function to delete a custom provider
 export async function deleteCustomProvider(providerId: string): Promise<void> {
-  const { customProviders = [] } = await Browser.storage.local.get('customProviders');
+  const { customProviders: storedCustomProviders } = await Browser.storage.local.get('customProviders');
+  const customProviders = Array.isArray(storedCustomProviders)
+    ? storedCustomProviders
+    : storedCustomProviders && typeof storedCustomProviders === 'object'
+    ? Object.values(storedCustomProviders)
+    : [];
   
   const updatedProviders = customProviders.filter((p: CustomProviderConfig) => p.id !== providerId);
   
@@ -378,15 +399,15 @@ https://map.baidu.com
 `
 export const APP_TITLE = `Glarity Summary`
 
-export const DEFAULT_MODEL = 'gpt-3.5-turbo'
+export const DEFAULT_MODEL = 'gpt-4o'
 export const DEFAULT_API_HOST = 'api.openai.com'
 
 /**
  * 解析用户自定义模型列表
  * 支持语法:
- * - 普通模型列表，以逗号分隔: "gpt-3.5-turbo,gpt-4"
+ * - 普通模型列表，以逗号分隔: "gpt-5.2,gpt-4o"
  * - 使用 + 添加模型: "+custom-model"
- * - 使用 - 隐藏模型: "-gpt-3.5-turbo"
+ * - 使用 - 隐藏模型: "-gpt-4o"
  * - 使用 -all 隐藏所有默认模型: "-all"
  * - 自定义显示名: "model=显示名称"
  * 
@@ -398,16 +419,19 @@ export function parseCustomModels(customModelsStr: string, defaultModels: string
   models: string[], 
   displayNames: Record<string, string> 
 } {
-  if (!customModelsStr.trim()) {
-    return { models: [...defaultModels], displayNames: {} }
+  const safeDefaults = Array.isArray(defaultModels) ? defaultModels : []
+  const customStr = typeof customModelsStr === 'string' ? customModelsStr : ''
+
+  if (!customStr.trim()) {
+    return { models: [...safeDefaults], displayNames: {} }
   }
 
   const displayNames: Record<string, string> = {}
-  const modelEntries = customModelsStr.split(',').map(entry => entry.trim()).filter(Boolean)
+  const modelEntries = customStr.split(',').map(entry => entry.trim()).filter(Boolean)
   
   // 检查是否有 -all 指令
   const hideAllDefault = modelEntries.some(entry => entry === '-all')
-  let resultModels = hideAllDefault ? [] : [...defaultModels]
+  let resultModels = hideAllDefault ? [] : [...safeDefaults]
   
   for (const entry of modelEntries) {
     if (entry === '-all') continue

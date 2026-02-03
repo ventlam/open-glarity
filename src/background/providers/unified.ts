@@ -6,7 +6,8 @@ import {
   buildRequestUrl, 
   buildAuthHeaders, 
   buildRequestBody,
-  ProviderDefinition 
+  ProviderDefinition,
+  CUSTOM_PROVIDER_TEMPLATE
 } from '@/providers/registry'
 
 /**
@@ -21,14 +22,14 @@ export class UnifiedAIProvider implements Provider {
   ) {}
 
   async generateAnswer(params: GenerateAnswerParams) {
-    const provider = getProviderById(this.providerId)
-    if (!provider) {
-      throw new Error(`Unknown provider: ${this.providerId}`)
-    }
-
     const config = await this.getProviderConfig()
     if (!config) {
       throw new Error(`Provider ${this.providerId} not configured`)
+    }
+    
+    const provider = getProviderById(this.providerId) || this.buildCustomProvider(config)
+    if (!provider) {
+      throw new Error(`Unknown provider: ${this.providerId}`)
     }
 
     // Build request URL
@@ -56,16 +57,54 @@ export class UnifiedAIProvider implements Provider {
 
         try {
           const data = JSON.parse(message)
-          const text = provider.requestFormat === 'anthropic' 
-            ? data.delta?.text || data.content?.[0]?.text
-            : data.choices?.[0]?.delta?.content || data.choices?.[0]?.text
+
+          if (data.error) {
+            const errorText =
+              data.error?.message || data.error?.status || JSON.stringify(data.error)
+            params.onEvent({
+              type: 'answer',
+              data: {
+                text: `Error: ${errorText}`,
+                messageId: 'error',
+                conversationId: 'error',
+              },
+            })
+            return
+          }
+
+          let text = ''
+
+          if (provider.requestFormat === 'gemini') {
+            if (data.candidates?.[0]?.content?.parts?.length) {
+              text = data.candidates[0].content.parts.map((part: any) => part.text || '').join('')
+            } else if (data.candidates?.[0]?.content?.parts) {
+              text = data.candidates[0].content.parts.map((part: any) => part.text || '').join('')
+            } else if (data.candidates?.[0]?.text) {
+              text = data.candidates[0].text
+            } else if (data.text) {
+              text = data.text
+            }
+          } else if (provider.requestFormat === 'anthropic') {
+            text =
+              data.delta?.text ||
+              data.content?.[0]?.text ||
+              data.message?.content?.[0]?.text ||
+              ''
+          } else {
+            text =
+              data.choices?.[0]?.delta?.content ||
+              data.choices?.[0]?.message?.content ||
+              data.choices?.[0]?.text ||
+              data.text ||
+              ''
+          }
 
           if (!text || text === '```' || text === '<|im_sep|>') {
             return
           }
 
           result += text
-          messageId = data.id || messageId
+          messageId = data.id || messageId || Date.now().toString()
 
           params.onEvent({
             type: 'answer',
@@ -87,6 +126,25 @@ export class UnifiedAIProvider implements Provider {
   private async getProviderConfig(): Promise<any> {
     const configs = await getProviderConfigs()
     return configs.configs[this.providerId]
+  }
+
+  private buildCustomProvider(config: any): ProviderDefinition {
+    return {
+      ...CUSTOM_PROVIDER_TEMPLATE,
+      id: this.providerId,
+      name: config?.name || 'Custom Provider',
+      description: config?.apiHost
+        ? `${config.apiHost}${config.model ? ` · ${config.model}` : ''}`
+        : CUSTOM_PROVIDER_TEMPLATE.description,
+      defaultHost: config?.apiHost || CUSTOM_PROVIDER_TEMPLATE.defaultHost,
+      defaultPath: config?.apiPath || CUSTOM_PROVIDER_TEMPLATE.defaultPath,
+      authMethod: config?.authMethod || CUSTOM_PROVIDER_TEMPLATE.authMethod,
+      authKeyName: config?.authKeyName || 'key',
+      requestFormat: config?.requestFormat || CUSTOM_PROVIDER_TEMPLATE.requestFormat,
+      modelPathTemplate: config?.modelPathTemplate || CUSTOM_PROVIDER_TEMPLATE.modelPathTemplate,
+      customHeaders: config?.customHeaders || CUSTOM_PROVIDER_TEMPLATE.customHeaders,
+      defaultModels: config?.model ? [config.model] : CUSTOM_PROVIDER_TEMPLATE.defaultModels,
+    }
   }
 
   private buildRequestUrl(provider: ProviderDefinition, config: any): string {

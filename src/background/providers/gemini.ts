@@ -30,7 +30,7 @@ export class GeminiProvider implements Provider {
       const [config] = await Promise.all([getProviderConfigs()])
 
       const geminiConfig = config.configs[ProviderType.Gemini]
-      const geminiModel = this.model || geminiConfig?.model || 'gemini-2.0-flash'
+      const geminiModel = this.model || geminiConfig?.model || 'gemini-2.5-flash'
       const apiHost = geminiConfig?.apiHost || 'generativelanguage.googleapis.com'
       
       // 修复API路径格式

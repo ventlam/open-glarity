@@ -33,6 +33,96 @@
   word-wrap: break-word;
 }
 
+.glarity--button-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.glarity--prompt-panel {
+  background: #fff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.glarity--prompt-textarea {
+  width: 100% !important;
+  max-width: 100% !important;
+
+  textarea {
+    width: 100%;
+    min-height: 220px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+}
+
+.glarity--prompt-helper {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #888;
+  white-space: pre-line;
+}
+
+.glarity--prompt-actions {
+  margin-top: 12px;
+}
+
+.glarity--prompt-examples {
+  margin-top: 16px;
+}
+
+.glarity--prompt-examples__title {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.glarity--prompt-examples__list {
+  display: grid;
+  gap: 10px;
+}
+
+.glarity--prompt-example {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #eaeaea;
+  background: #fafafa;
+}
+
+.glarity--prompt-example__text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  white-space: pre-wrap;
+}
+
+.glarity--prompt-example__copy {
+  border: none;
+  background: transparent;
+  padding: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #888;
+
+  svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+  }
+
+  &:hover {
+    background: #f0f0f0;
+    color: #555;
+  }
+}
+
 @media screen and (max-width: 900px) {
   .glarity--w-\[900px\] {
     max-width: 100%;
@@ -138,6 +228,243 @@
   text-transform: uppercase;
   color: #999;
   letter-spacing: 0.5px;
+}
+
+// 大模型服务 - 新布局
+.glarity--provider-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.glarity--provider-list {
+  background: #fff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  padding: 16px;
+  position: relative;
+  z-index: 1;
+}
+
+.glarity--provider-list__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.glarity--provider-group {
+  margin-top: 16px;
+}
+
+.glarity--provider-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #888;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.glarity--provider-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: 8px;
+
+  &:hover {
+    background-color: #f6f7fb;
+  }
+
+  &.active {
+    border-color: #0070f3;
+    background-color: #eef5ff;
+  }
+
+  &.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.glarity--provider-item__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.glarity--provider-item__title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.glarity--provider-item__desc {
+  font-size: 12px;
+  color: #666;
+}
+
+.glarity--provider-item__badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.glarity--badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef1f6;
+  color: #5b6773;
+}
+
+.glarity--badge--active {
+  background: #0070f3;
+  color: #fff;
+}
+
+.glarity--badge--configured {
+  background: #16a34a;
+  color: #fff;
+}
+
+.glarity--badge--preset {
+  background: #fde68a;
+  color: #92400e;
+}
+
+.glarity--provider-detail {
+  background: #fff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  padding: 20px;
+  min-height: 480px;
+  position: relative;
+  z-index: 1;
+}
+
+.glarity--provider-detail__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.glarity--provider-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.glarity--provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.glarity--provider-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.glarity--native-select {
+  position: relative;
+  width: 100%;
+
+  select {
+    width: 100%;
+    height: 36px;
+    border: 1px solid #eaeaea;
+    border-radius: 8px;
+    padding: 6px 36px 6px 10px;
+    background-color: #fff;
+    color: #111;
+    font-size: 14px;
+    line-height: 1.4;
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 12px;
+  }
+
+  select:disabled {
+    background-color: #f4f4f4;
+    color: #999;
+    cursor: not-allowed;
+  }
+}
+
+.glarity--provider-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #666;
+}
+
+.glarity--provider-empty {
+  padding: 20px 0;
+  text-align: center;
+  color: #999;
+}
+
+@media screen and (max-width: 960px) {
+  .glarity--provider-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .glarity--provider-list,
+  .glarity--provider-detail {
+    background: #1f1f23;
+    border-color: #333;
+  }
+
+  .glarity--provider-item {
+    &:hover {
+      background-color: rgba(255, 255, 255, 0.04);
+    }
+
+    &.active {
+      background-color: rgba(0, 112, 243, 0.2);
+    }
+  }
+
+  .glarity--provider-item__desc,
+  .glarity--provider-inline,
+  .glarity--provider-group-title {
+    color: #aaa;
+  }
+
+  .glarity--badge--preset {
+    background: #3f2c00;
+    color: #fcd34d;
+  }
+
+  .glarity--native-select {
+    select {
+      background-color: #1f1f23;
+      border-color: #333;
+      color: #e5e5e5;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23aaa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    }
+
+    select:disabled {
+      background-color: #2a2a2f;
+      color: #777;
+    }
+  }
 }
 
 // 移动端响应式设计

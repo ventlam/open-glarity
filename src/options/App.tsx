@@ -2,13 +2,8 @@ import {
   CssBaseline,
   GeistProvider,
   Radio,
-  Select,
   Text,
-  Toggle,
   useToasts,
-  Divider,
-  Button,
-  Card,
 } from '@geist-ui/core'
 import { useCallback, useEffect, useMemo, useState } from 'preact/hooks'
 import '@/assets/styles/base.scss'
@@ -20,7 +15,6 @@ import {
   TRIGGER_MODE_TEXT,
   updateUserConfig,
   DEFAULT_PAGE_SUMMARY_BLACKLIST,
-  ProviderType,
 } from '@/config'
 import { PageSummaryProps } from './components/PageSummary'
 import ProviderSelect from './ProviderSelect'
@@ -40,13 +34,6 @@ import {
 
 import './styles.scss'
 
-// 表示当前视图状态的枚举
-enum ViewState {
-  MainMenu, // 主菜单
-  AiProviders, // AI提供商列表
-  ProviderConfig, // 特定AI提供商的配置
-}
-
 // 定义导航菜单项类型
 enum NavSection {
   General = "general",
@@ -61,38 +48,6 @@ type NavItem = {
   icon: () => JSX.Element;
   section: NavSection;
 }
-
-// 简单的箭头图标组件
-const ChevronRight = () => (
-  <svg 
-    width="20" 
-    height="20" 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    strokeWidth="2" 
-    strokeLinecap="round" 
-    strokeLinejoin="round"
-  >
-    <polyline points="9 18 15 12 9 6"></polyline>
-  </svg>
-);
-
-// 返回箭头图标组件
-const ChevronLeft = () => (
-  <svg 
-    width="20" 
-    height="20" 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    strokeWidth="2" 
-    strokeLinecap="round" 
-    strokeLinejoin="round"
-  >
-    <polyline points="15 18 9 12 15 6"></polyline>
-  </svg>
-);
 
 // 设置图标
 const SettingsIcon = () => (
@@ -253,8 +208,6 @@ function OptionsPage(
   
   // 当前活动的导航项
   const [activeNavItem, setActiveNavItem] = useState<string>("general");
-  // 当前选择的AI提供商 (用于AI模型页面)
-  const [selectedProvider, setSelectedProvider] = useState<ProviderType | null>(null);
 
   // 定义导航项
   const navItems: NavItem[] = [
@@ -301,39 +254,6 @@ function OptionsPage(
     return str ?? ''
   }
 
-  // 处理选择特定提供商
-  const handleSelectProvider = (provider: ProviderType) => {
-    setSelectedProvider(provider)
-  }
-
-  // 处理返回AI模型列表
-  const handleBackToAiModels = () => {
-    setSelectedProvider(null)
-  }
-
-  // 获取提供商显示名称
-  const getProviderDisplayName = (provider: ProviderType): string => {
-    switch(provider) {
-      case ProviderType.ChatGPT: return 'ChatGPT 官方'
-      case ProviderType.GPT3: return 'OpenAI API'
-      case ProviderType.Claude: return 'Claude'
-      case ProviderType.Gemini: return 'Google Gemini'
-      case ProviderType.Mistral: return 'Mistral AI'
-      default: return provider
-    }
-  }
-
-  // 获取提供商描述
-  const getProviderDescription = (provider: ProviderType): string => {
-    switch(provider) {
-      case ProviderType.ChatGPT: return '为ChatGPT Web应用提供支持的API，免费但有时不稳定'
-      case ProviderType.GPT3: return 'OpenAI官方API，稳定但收费'
-      case ProviderType.Claude: return 'Anthropic公司的Claude模型，性能优异'
-      case ProviderType.Gemini: return 'Google AI Studio提供的Gemini模型'
-      case ProviderType.Mistral: return 'Mistral公司提供的高效AI模型'
-      default: return ''
-    }
-  }
 
   useEffect(() => {
     getUserConfig().then((config) => {
@@ -406,64 +326,29 @@ function OptionsPage(
       <Text className="glarity--my-2">
         ChatGPT响应使用的语言。<span className="glarity--italic">Auto</span>是推荐选项。
       </Text>
-      <Select
-        value={language}
-        placeholder="选择一个"
-        onChange={(val) => onLanguageChange(val as Language)}
-      >
-        {Object.entries(Language).map(([k, v]) => (
-          <Select.Option key={k} value={v}>
-            {getSplitString(String(k))}
-          </Select.Option>
-        ))}
-      </Select>
+      <div className="glarity--native-select">
+        <select
+          value={language}
+          onChange={(e) => onLanguageChange(e.currentTarget.value as Language)}
+        >
+          {Object.entries(Language).map(([k, v]) => (
+            <option key={k} value={v}>
+              {getSplitString(String(k))}
+            </option>
+          ))}
+        </select>
+      </div>
     </>
   )
 
-  // 渲染AI提供商列表
+  // 渲染AI提供商配置页面
   const renderAiModels = () => (
     <>
       <Text h2>大模型服务</Text>
-      <Text className="glarity--mb-4">选择要配置的AI大模型服务</Text>
-
-      {Object.values(ProviderType)
-        .filter(provider => provider !== ProviderType.ChatGPT) // 过滤掉ChatGPT官方选项
-        .map((provider) => (
-        <Card 
-          key={provider} 
-          hoverable 
-          className="glarity--cursor-pointer glarity--mt-3 glarity--provider-card"
-          onClick={() => handleSelectProvider(provider)}
-        >
-          <div className="glarity--flex glarity--justify-between glarity--items-center">
-            <div>
-              <Text h4>{getProviderDisplayName(provider)}</Text>
-              <Text small>{getProviderDescription(provider)}</Text>
-            </div>
-            <ChevronRight />
-          </div>
-        </Card>
-      ))}
+      <Text className="glarity--mb-4">选择服务并在右侧配置 API 与模型</Text>
+      <ProviderSelect />
     </>
   )
-
-  // 渲染特定提供商配置
-  const renderProviderConfig = () => {
-    if (!selectedProvider) return renderAiModels();
-    
-    return (
-      <>
-        <div className="glarity--flex glarity--items-center glarity--gap-2 glarity--mb-5">
-          <Button auto icon={<ChevronLeft />} onClick={handleBackToAiModels} className="glarity--back-button">
-            返回
-          </Button>
-          <Text h2 className="glarity--m-0">{getProviderDisplayName(selectedProvider)}</Text>
-        </div>
-
-        <ProviderSelect initialProvider={selectedProvider} />
-      </>
-    );
-  }
 
   // 渲染提示词设置页面
   const renderPromptSettings = () => (
@@ -513,7 +398,7 @@ function OptionsPage(
   // 根据当前活动的导航项选择渲染内容
   const renderContent = () => {
     if (activeNavItem === "ai-models") {
-      return renderProviderConfig();
+      return renderAiModels();
     }
     
     switch (activeNavItem) {
@@ -566,7 +451,6 @@ function OptionsPage(
             className={`glarity--nav-item ${activeNavItem === item.id ? 'active' : ''}`}
             onClick={() => {
               setActiveNavItem(item.id);
-              setSelectedProvider(null); // 重置选中的提供商
             }}
           >
             <item.icon />

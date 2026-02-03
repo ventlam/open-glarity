@@ -1,7 +1,6 @@
 import React from 'react'
 import { useCallback } from 'preact/hooks'
 import { Text, Code, Textarea, Card, Button, Snippet, Collapse, useToasts } from '@geist-ui/core'
-import { Space } from 'antd'
 import { updateUserConfig } from '@/config'
 import { isIOS, changeToast } from '@/utils/utils'
 import {
@@ -42,6 +41,14 @@ function CustomizePrompt(props: Props) {
     setPromptComment,
   } = props
   const { setToast } = useToasts()
+  const youtubeExamplePrompts = [
+    'Summarize the above content highlights.',
+    'Summarize the above in 3 bullet points.',
+    `What's key takeaways from the above?`,
+    'Extract the gist of the above.',
+    customizePrompt1,
+    customizePromptClickbait,
+  ]
 
   const onPromptChange = useCallback(
     (e: React.ChangeEvent, type?: string | undefined) => {
@@ -147,6 +154,34 @@ function CustomizePrompt(props: Props) {
     ],
   )
 
+  const onCopyExample = useCallback(
+    async (text: string) => {
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text)
+        } else {
+          const textarea = document.createElement('textarea')
+          textarea.value = text
+          textarea.style.position = 'fixed'
+          textarea.style.opacity = '0'
+          textarea.style.left = '-9999px'
+          document.body.appendChild(textarea)
+          textarea.focus()
+          textarea.select()
+          const success = document.execCommand('copy')
+          document.body.removeChild(textarea)
+          if (!success) {
+            throw new Error('copy failed')
+          }
+        }
+        setToast({ text: 'Copied', type: 'success' })
+      } catch (error) {
+        setToast({ text: 'Copy failed', type: 'error' })
+      }
+    },
+    [setToast],
+  )
+
   return (
     <>
       {!isIOS && (
@@ -159,18 +194,13 @@ function CustomizePrompt(props: Props) {
             <Collapse
               title={
                 <Text h4 className="glarity--mt-5 glarity--mb-0">
-                  YouTube / Bilibili{' '}
+                  YouTube
                 </Text>
               }
             >
-              <Card className="glarity--card">
-                <Text className="glarity--my-1">
-                  <Code block my={0}>
-                    {customizePrompt}
-                  </Code>
-                </Text>
-
+              <div className="glarity--prompt-panel">
                 <Textarea
+                  className="glarity--prompt-textarea"
                   placeholder="Please enter a Prompt."
                   value={prompt}
                   resize={'vertical'}
@@ -178,53 +208,39 @@ function CustomizePrompt(props: Props) {
                     onPromptChange(e)
                   }}
                 />
-
-                <Card.Footer>
-                  <Space>
-                    <Button type="secondary" auto scale={1 / 3} onClick={onSavePrompt}>
-                      Save
-                    </Button>{' '}
-                    <Button type="secondary" ghost auto scale={1 / 3} onClick={onSetPrompt}>
-                      Use default
-                    </Button>
-                  </Space>
-                </Card.Footer>
-              </Card>
-              <Text className="glarity--my-1">Example Prompts: </Text>
-              <ul className="glarity--prompt__list">
-                <li>
-                  <Snippet symbol="" type="secondary">
-                    Summarize the above content highlights.
-                  </Snippet>
-                </li>
-                <li>
-                  {' '}
-                  <Snippet symbol="" type="secondary">
-                    Summarize the above in 3 bullet points.{' '}
-                  </Snippet>
-                </li>
-                <li>
-                  {' '}
-                  <Snippet symbol="" type="secondary">
-                    {`What's key takeaways from the above?`}
-                  </Snippet>
-                </li>
-                <li>
-                  <Snippet symbol="" type="secondary">
-                    Extract the gist of the above.
-                  </Snippet>
-                </li>
-                <li>
-                  <Snippet symbol="" type="secondary">
-                    {customizePrompt1}
-                  </Snippet>
-                </li>
-                <li>
-                  <Snippet symbol="" type="success">
-                    {customizePromptClickbait}
-                  </Snippet>
-                </li>
-              </ul>
+                <div className="glarity--prompt-helper">{customizePrompt}</div>
+                <div className="glarity--button-row glarity--prompt-actions">
+                  <Button type="secondary" auto scale={1 / 3} onClick={onSavePrompt}>
+                    Save
+                  </Button>
+                  <Button type="secondary" ghost auto scale={1 / 3} onClick={onSetPrompt}>
+                    Use default
+                  </Button>
+                </div>
+              </div>
+              <div className="glarity--prompt-examples">
+                <Text className="glarity--prompt-examples__title">Example Prompts:</Text>
+                <div className="glarity--prompt-examples__list">
+                  {youtubeExamplePrompts.map((item, index) => (
+                    <div className="glarity--prompt-example" key={`youtube-example-${index}`}>
+                      <div className="glarity--prompt-example__text">{item}</div>
+                      <button
+                        className="glarity--prompt-example__copy"
+                        type="button"
+                        aria-label="Copy prompt"
+                        onClick={() => {
+                          onCopyExample(item)
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="11" height="11" rx="2" />
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </Collapse>
 
             {/* Google */}
@@ -252,7 +268,7 @@ function CustomizePrompt(props: Props) {
                 />
 
                 <Card.Footer>
-                  <Space>
+                  <div className="glarity--button-row">
                     <Button
                       type="secondary"
                       auto
@@ -262,7 +278,7 @@ function CustomizePrompt(props: Props) {
                       }}
                     >
                       Save
-                    </Button>{' '}
+                    </Button>
                     <Button
                       type="secondary"
                       ghost
@@ -274,7 +290,7 @@ function CustomizePrompt(props: Props) {
                     >
                       Use default
                     </Button>
-                  </Space>
+                  </div>
                 </Card.Footer>
               </Card>
               <Text className="glarity--my-1">Example Prompts: </Text>
@@ -329,7 +345,7 @@ function CustomizePrompt(props: Props) {
                 />
 
                 <Card.Footer>
-                  <Space>
+                  <div className="glarity--button-row">
                     <Button
                       type="secondary"
                       auto
@@ -339,7 +355,7 @@ function CustomizePrompt(props: Props) {
                       }}
                     >
                       Save
-                    </Button>{' '}
+                    </Button>
                     <Button
                       type="secondary"
                       ghost
@@ -351,7 +367,7 @@ function CustomizePrompt(props: Props) {
                     >
                       Use default
                     </Button>
-                  </Space>
+                  </div>
                 </Card.Footer>
               </Card>
               <Text className="glarity--my-1">Example Prompts: </Text>
@@ -409,7 +425,7 @@ function CustomizePrompt(props: Props) {
                 />
 
                 <Card.Footer>
-                  <Space>
+                  <div className="glarity--button-row">
                     <Button
                       type="secondary"
                       auto
@@ -419,7 +435,7 @@ function CustomizePrompt(props: Props) {
                       }}
                     >
                       Save
-                    </Button>{' '}
+                    </Button>
                     <Button
                       type="secondary"
                       ghost
@@ -431,7 +447,7 @@ function CustomizePrompt(props: Props) {
                     >
                       Use default
                     </Button>
-                  </Space>
+                  </div>
                 </Card.Footer>
               </Card>
               <Text className="glarity--my-1">Example Prompts: </Text>
