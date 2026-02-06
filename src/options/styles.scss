@@ -376,6 +376,21 @@
   gap: 6px;
 }
 
+.glarity--curl-import {
+  width: 100%;
+  min-height: 120px;
+  box-sizing: border-box;
+  border: 1px solid #eaeaea;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #222;
+  background: #fff;
+  resize: vertical;
+  font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
 .glarity--native-select {
   position: relative;
   width: 100%;
@@ -424,7 +439,7 @@
   }
 }
 
-@media (prefers-color-scheme: dark) {
+@mixin glarity-options-dark-theme {
   .glarity--provider-list,
   .glarity--provider-detail {
     background: #1f1f23;
@@ -465,6 +480,22 @@
       color: #777;
     }
   }
+
+  .glarity--curl-import {
+    background: #1f1f23;
+    border-color: #333;
+    color: #e5e5e5;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-glarity-theme='light']) {
+    @include glarity-options-dark-theme;
+  }
+}
+
+:root[data-glarity-theme='dark'] {
+  @include glarity-options-dark-theme;
 }
 
 // 移动端响应式设计

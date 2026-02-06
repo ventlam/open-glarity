@@ -179,8 +179,7 @@ $font-size-small: 12px;
   font-weight: normal;
 }
 
-// Dark
-@media (prefers-color-scheme: dark) {
+@mixin glarity-base-dark-theme {
   .glarity--card {
     background: rgb(35, 36, 40);
     border-color: #444950;
@@ -213,4 +212,16 @@ $font-size-small: 12px;
       color: #999;
     }
   }
+}
+
+// Dark (follow system theme, unless options page explicitly forces light)
+@media (prefers-color-scheme: dark) {
+  :root:not([data-glarity-theme='light']) {
+    @include glarity-base-dark-theme;
+  }
+}
+
+// Dark override for options page when user selects dark explicitly
+:root[data-glarity-theme='dark'] {
+  @include glarity-base-dark-theme;
 }

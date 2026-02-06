@@ -81,6 +81,28 @@ export async function fetchSSE(
         try {
           const text = await resp.text()
           console.debug('非SSE响应文本:', text)
+
+          const lines = text
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+          if (lines.length > 1) {
+            let parsedLineCount = 0
+            for (const line of lines) {
+              try {
+                const lineObj = JSON.parse(line)
+                onMessage(JSON.stringify(lineObj))
+                parsedLineCount += 1
+              } catch {
+                parsedLineCount = 0
+                break
+              }
+            }
+            if (parsedLineCount === lines.length) {
+              onMessage('[DONE]')
+              return
+            }
+          }
           
           let responseObj
           // 尝试解析文本是否为JSON

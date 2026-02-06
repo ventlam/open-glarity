@@ -512,6 +512,15 @@ function App() {
     })
   }, [])
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const resolvedTheme = themeType === Theme.Dark ? Theme.Dark : Theme.Light
+    document.documentElement.setAttribute('data-glarity-theme', resolvedTheme)
+    return () => {
+      document.documentElement.removeAttribute('data-glarity-theme')
+    }
+  }, [themeType])
+
   return (
     <GeistProvider themeType={themeType}>
       <CssBaseline />

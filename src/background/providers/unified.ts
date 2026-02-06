@@ -40,9 +40,6 @@ export class UnifiedAIProvider implements Provider {
     
     // Build request body
     const body = this.buildRequestBody(provider, config, params.prompt)
-    if (provider.requestFormat === 'openai' || provider.requestFormat === 'anthropic') {
-      body.stream = true
-    }
 
     let result = ''
     let messageId = ''
@@ -87,6 +84,12 @@ export class UnifiedAIProvider implements Provider {
             } else if (data.text) {
               text = data.text
             }
+          } else if (provider.requestFormat === 'ollama') {
+            text =
+              data.message?.content ||
+              data.response ||
+              data.text ||
+              ''
           } else if (provider.requestFormat === 'anthropic') {
             text =
               data.delta?.text ||
@@ -152,6 +155,10 @@ export class UnifiedAIProvider implements Provider {
 
   private buildRequestUrl(provider: ProviderDefinition, config: any): string {
     let url = buildRequestUrl(provider, config, config.model || provider.defaultModels[0])
+
+    if (provider.requestFormat === 'gemini' && config?.stream === false) {
+      url = url.replace(':streamGenerateContent', ':generateContent')
+    }
     
     // Handle query param auth (e.g., Gemini)
     if (provider.authMethod === 'query-param' && provider.authKeyName && config.apiKey) {
@@ -187,7 +194,19 @@ export class UnifiedAIProvider implements Provider {
       temperature: 0.7
     }
     
-    return buildRequestBody(provider, config, messages, options)
+    const body = buildRequestBody(provider, config, messages, options)
+    const streamEnabled = config?.stream !== false
+    if (
+      body &&
+      typeof body === 'object' &&
+      (provider.requestFormat === 'openai' ||
+        provider.requestFormat === 'anthropic' ||
+        provider.requestFormat === 'ollama' ||
+        'stream' in body)
+    ) {
+      body.stream = streamEnabled
+    }
+    return body
   }
 }
 

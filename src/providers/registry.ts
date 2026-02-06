@@ -403,8 +403,9 @@ export function buildRequestUrl(provider: ProviderDefinition, config: any, model
   } else if (path.includes('{model}')) {
     path = path.replace('{model}', model)
   }
-  
-  return `https://${host}${path}`
+
+  const base = /^https?:\/\//i.test(host) ? host : `https://${host}`
+  return `${base}${path}`
 }
 
 export function buildAuthHeaders(provider: ProviderDefinition, apiKey: string): Record<string, string> {
@@ -417,10 +418,10 @@ export function buildAuthHeaders(provider: ProviderDefinition, apiKey: string): 
       headers['Authorization'] = `Bearer ${apiKey}`
       break
     case 'x-api-key':
-      headers['x-api-key'] = apiKey
+      headers['X-API-Key'] = apiKey
       break
     case 'api-key':
-      headers['api-key'] = apiKey
+      headers['API-Key'] = apiKey
       break
     case 'query-param':
       // Query param is handled in URL, not headers

@@ -125,6 +125,7 @@ export interface CustomProviderConfig {
   apiHost: string
   apiPath: string
   model: string
+  stream?: boolean
   defaultModels?: string[]
   authMethod: 'bearer' | 'api-key' | 'query-param' | 'x-api-key' | 'none'
   authKeyName?: string

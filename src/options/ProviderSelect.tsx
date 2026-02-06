@@ -22,8 +22,10 @@ import {
 import {
   BUILT_IN_PROVIDERS,
   CUSTOM_PROVIDER_TEMPLATE,
+  AuthMethod,
   ProviderDefinition,
   ProviderField,
+  RequestFormat,
   buildAuthHeaders,
   buildRequestBody,
   buildRequestUrl,
@@ -89,6 +91,27 @@ const PRESET_CUSTOM_PROVIDERS: CustomProviderConfig[] = [
     model: 'deepseek-chat',
     defaultModels: ['deepseek-chat', 'deepseek-reasoner'],
     authMethod: 'bearer',
+  },
+  {
+    id: 'preset-openrouter',
+    name: 'OpenRouter',
+    apiKey: '',
+    apiHost: 'openrouter.ai',
+    apiPath: '/api/v1/chat/completions',
+    model: 'openai/gpt-5-mini',
+    defaultModels: [
+      'openai/gpt-5-mini',
+      'google/gemini-2.5-flash',
+      'deepseek/deepseek-chat-v3.1:free',
+      'anthropic/claude-3.5-sonnet',
+    ],
+    authMethod: 'bearer',
+    requestFormat: 'openai',
+    customHeaders: {
+      'HTTP-Referer': 'https://glarity.app',
+      'X-Title': 'Glarity Summary',
+    },
+    stream: true,
   },
   {
     id: 'preset-gpt-5-mini',
@@ -172,6 +195,187 @@ const PRESET_CUSTOM_PROVIDERS: CustomProviderConfig[] = [
 ]
 
 const PRESET_CUSTOM_PROVIDER_IDS = new Set(PRESET_CUSTOM_PROVIDERS.map((provider) => provider.id))
+const FAVORITE_PROVIDER_ORDER: Array<{ type: 'builtIn' | 'preset'; id: string }> = [
+  { type: 'builtIn', id: ProviderType.GPT3 },
+  { type: 'preset', id: 'preset-deepseek-v3.2' },
+  { type: 'preset', id: 'preset-openrouter' },
+  { type: 'builtIn', id: ProviderType.Gemini },
+]
+const BUILT_IN_PROVIDER_PRIORITY: Record<string, number> = {
+  [ProviderType.GPT3]: 1,
+  [ProviderType.Gemini]: 3,
+  [ProviderType.Claude]: 5,
+  [ProviderType.Mistral]: 90,
+}
+
+const tokenizeShellCommand = (command: string): string[] => {
+  const tokens: string[] = []
+  const regex = /"((?:\\"|[^"])*)"|'((?:\\'|[^'])*)'|(\S+)/g
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(command)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(match[1].replace(/\\"/g, '"'))
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2].replace(/\\'/g, "'"))
+    } else if (match[3] !== undefined) {
+      tokens.push(match[3])
+    }
+  }
+  return tokens
+}
+
+const parseHeaderLine = (header: string): { key: string; value: string } | null => {
+  const line = header.trim()
+  const separator = line.indexOf(':')
+  if (separator <= 0) return null
+  const key = line.slice(0, separator).trim().toLowerCase()
+  const value = line.slice(separator + 1).trim()
+  if (!key) return null
+  return { key, value }
+}
+
+type ParsedCurlConfig = {
+  apiHost: string
+  apiPath: string
+  apiKey?: string
+  authMethod?: AuthMethod
+  authKeyName?: string
+  model?: string
+  requestFormat?: RequestFormat
+  stream?: boolean
+}
+
+const parseCurlConfig = (raw: string): ParsedCurlConfig | null => {
+  const normalized = raw
+    .trim()
+    .replace(/\\\r?\n/g, ' ')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s+/g, ' ')
+
+  if (!/^curl\b/i.test(normalized)) return null
+  const tokens = tokenizeShellCommand(normalized)
+  if (tokens.length === 0 || tokens[0].toLowerCase() !== 'curl') return null
+
+  let rawUrl = ''
+  const headerLines: string[] = []
+  let rawBody = ''
+
+  for (let i = 1; i < tokens.length; i += 1) {
+    const token = tokens[i]
+    if (token === '-H' || token === '--header') {
+      const header = tokens[i + 1]
+      if (header) headerLines.push(header)
+      i += 1
+      continue
+    }
+    if (
+      token === '-d' ||
+      token === '--data' ||
+      token === '--data-raw' ||
+      token === '--data-binary' ||
+      token === '--data-urlencode'
+    ) {
+      const body = tokens[i + 1]
+      if (body) rawBody = body
+      i += 1
+      continue
+    }
+    if (token === '--url') {
+      const url = tokens[i + 1]
+      if (url) rawUrl = url
+      i += 1
+      continue
+    }
+    if (token === '-X' || token === '--request') {
+      i += 1
+      continue
+    }
+    if (!token.startsWith('-') && !rawUrl) {
+      rawUrl = token
+    }
+  }
+
+  if (!rawUrl) return null
+
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`)
+  } catch {
+    return null
+  }
+
+  const headers = headerLines
+    .map(parseHeaderLine)
+    .filter((item): item is { key: string; value: string } => Boolean(item))
+    .reduce<Record<string, string>>((acc, item) => {
+      acc[item.key] = item.value
+      return acc
+    }, {})
+
+  let authMethod: AuthMethod | undefined
+  let authKeyName: string | undefined
+  let apiKey = ''
+
+  const authorization = headers.authorization
+  if (authorization) {
+    const bearerMatch = authorization.match(/^bearer\s+(.+)$/i)
+    authMethod = 'bearer'
+    apiKey = bearerMatch ? bearerMatch[1].trim() : authorization.trim()
+  } else if (headers['x-api-key']) {
+    authMethod = 'x-api-key'
+    apiKey = headers['x-api-key']
+  } else if (headers['api-key']) {
+    authMethod = 'api-key'
+    apiKey = headers['api-key']
+  }
+
+  const queryParams = new URLSearchParams(parsedUrl.search)
+  if (!authMethod) {
+    const queryAuthCandidates = ['key', 'api_key', 'apikey', 'token', 'api-key']
+    for (const candidate of queryAuthCandidates) {
+      if (queryParams.has(candidate)) {
+        authMethod = 'query-param'
+        authKeyName = candidate
+        apiKey = queryParams.get(candidate) || ''
+        queryParams.delete(candidate)
+        break
+      }
+    }
+  }
+
+  let parsedBody: any
+  if (rawBody) {
+    try {
+      parsedBody = JSON.parse(rawBody)
+    } catch {
+      parsedBody = undefined
+    }
+  }
+
+  const model = typeof parsedBody?.model === 'string' ? parsedBody.model : undefined
+  const stream = typeof parsedBody?.stream === 'boolean' ? parsedBody.stream : undefined
+  let requestFormat: RequestFormat = 'openai'
+  const pathname = parsedUrl.pathname || '/'
+  if (pathname.endsWith('/api/chat') || pathname.endsWith('/api/generate')) {
+    requestFormat = 'ollama'
+  } else if (/\/v1beta\/models\//.test(pathname) || parsedBody?.contents) {
+    requestFormat = 'gemini'
+  }
+
+  const queryString = queryParams.toString()
+  const apiPath = `${pathname}${queryString ? `?${queryString}` : ''}` || '/'
+
+  return {
+    apiHost: `${parsedUrl.protocol}//${parsedUrl.host}`,
+    apiPath,
+    apiKey: apiKey || undefined,
+    authMethod: authMethod || undefined,
+    authKeyName,
+    model,
+    requestFormat,
+    stream,
+  }
+}
 
 const buildCustomDefinition = (provider: CustomProviderConfig): ProviderDefinition => {
   return {
@@ -191,8 +395,6 @@ const buildCustomDefinition = (provider: CustomProviderConfig): ProviderDefiniti
     defaultModels:
       provider.defaultModels && provider.defaultModels.length > 0
         ? provider.defaultModels
-        : provider.model
-        ? [provider.model]
         : CUSTOM_PROVIDER_TEMPLATE.defaultModels,
     fields: CUSTOM_PROVIDER_TEMPLATE.fields.map((field) => {
       if (field.name === 'apiHost') {
@@ -259,6 +461,7 @@ const CustomProviderModal = ({
     apiHost: '',
     apiPath: '/v1/chat/completions',
     model: '',
+    stream: true,
     authMethod: 'bearer',
   })
 
@@ -274,6 +477,7 @@ const CustomProviderModal = ({
       apiHost: '',
       apiPath: '/v1/chat/completions',
       model: '',
+      stream: true,
       authMethod: 'bearer',
     })
   }, [provider, visible])
@@ -397,8 +601,19 @@ const ProviderSelect = () => {
   const [showSecrets, setShowSecrets] = useState(false)
   const [useCustomModelInput, setUseCustomModelInput] = useState(false)
   const [customModelInput, setCustomModelInput] = useState('')
+  const [curlInput, setCurlInput] = useState('')
 
-  const displayProviders = useMemo(() => [...BUILT_IN_LIST], [])
+  const displayProviders = useMemo(() => {
+    return [...BUILT_IN_LIST].sort((a, b) => {
+      const aPriority = BUILT_IN_PROVIDER_PRIORITY[a.id as string] ?? 50
+      const bPriority = BUILT_IN_PROVIDER_PRIORITY[b.id as string] ?? 50
+      if (aPriority === bPriority) {
+        return BUILT_IN_LIST.findIndex((item) => item.id === a.id) -
+          BUILT_IN_LIST.findIndex((item) => item.id === b.id)
+      }
+      return aPriority - bPriority
+    })
+  }, [])
   const normalizeCustomProviders = (value: unknown): CustomProviderConfig[] =>
     normalizeArray<CustomProviderConfig>(value)
   const mergePresetCustomProviders = (stored: CustomProviderConfig[]) => {
@@ -458,6 +673,10 @@ const ProviderSelect = () => {
     }
   }, [loading, selectedProvider, customProviders, displayProviders])
 
+  useEffect(() => {
+    setCurlInput('')
+  }, [selectedProvider])
+
   const customProviderIds = useMemo(
     () => new Set(customProviders.map((provider) => provider.id)),
     [customProviders],
@@ -488,6 +707,7 @@ const ProviderSelect = () => {
     }
     return parseCustomModels(customModelsValue, selectedDefinition.defaultModels || [])
   }, [customModelsValue, selectedDefinition])
+  const modelOptionKey = modelOptions.join('||')
 
   useEffect(() => {
     if (!selectedDefinition) return
@@ -496,7 +716,7 @@ const ProviderSelect = () => {
     setUseCustomModelInput(!!currentModel && !inList)
     setCustomModelInput(currentModel)
     setTestResult(null)
-  }, [selectedProvider, selectedDefinition, customModelsValue])
+  }, [selectedProvider, customModelsValue, selectedConfig.model, modelOptionKey])
 
   const updateConfig = (updates: Record<string, any>) => {
     setProviderConfigs((prev) => ({
@@ -608,24 +828,55 @@ const ProviderSelect = () => {
         apiPath: selectedConfig.apiPath || selectedDefinition.defaultPath,
         model,
       }
+      const providerForRequest: ProviderDefinition = {
+        ...selectedDefinition,
+        authMethod:
+          (effectiveConfig.authMethod as ProviderDefinition['authMethod']) ||
+          selectedDefinition.authMethod,
+        authKeyName: effectiveConfig.authKeyName || selectedDefinition.authKeyName,
+        requestFormat:
+          (effectiveConfig.requestFormat as ProviderDefinition['requestFormat']) ||
+          selectedDefinition.requestFormat,
+        modelPathTemplate: effectiveConfig.modelPathTemplate || selectedDefinition.modelPathTemplate,
+        customHeaders: {
+          ...(selectedDefinition.customHeaders || {}),
+          ...(effectiveConfig.customHeaders || {}),
+        },
+      }
 
-      const url = buildRequestUrl(selectedDefinition, effectiveConfig, model)
-      const headers = buildAuthHeaders(selectedDefinition, effectiveConfig.apiKey || '')
+      const url = buildRequestUrl(providerForRequest, effectiveConfig, model)
+      const headers = buildAuthHeaders(providerForRequest, effectiveConfig.apiKey || '')
       const body = buildRequestBody(
-        selectedDefinition,
+        providerForRequest,
         effectiveConfig,
         [{ role: 'user', content: '你好，这是一条测试消息。请回复"测试成功"。' }],
         { max_tokens: 10 },
       )
+      const streamEnabled = effectiveConfig.stream !== false
+      const requestFormat =
+        effectiveConfig.requestFormat || providerForRequest.requestFormat || 'openai'
+      if (
+        body &&
+        typeof body === 'object' &&
+        (requestFormat === 'openai' ||
+          requestFormat === 'anthropic' ||
+          requestFormat === 'ollama' ||
+          'stream' in body)
+      ) {
+        body.stream = streamEnabled
+      }
 
       let finalUrl = url
+      if (!streamEnabled && requestFormat === 'gemini') {
+        finalUrl = finalUrl.replace(':streamGenerateContent', ':generateContent')
+      }
       if (
-        selectedDefinition.authMethod === 'query-param' &&
-        selectedDefinition.authKeyName &&
+        providerForRequest.authMethod === 'query-param' &&
+        providerForRequest.authKeyName &&
         effectiveConfig.apiKey
       ) {
         const separator = finalUrl.includes('?') ? '&' : '?'
-        finalUrl = `${finalUrl}${separator}${selectedDefinition.authKeyName}=${encodeURIComponent(
+        finalUrl = `${finalUrl}${separator}${providerForRequest.authKeyName}=${encodeURIComponent(
           effectiveConfig.apiKey,
         )}`
       }
@@ -728,6 +979,47 @@ const ProviderSelect = () => {
     })
   }, [searchValue, userCustomProviders])
 
+  const favoriteBuiltInIds = useMemo(
+    () =>
+      new Set(
+        FAVORITE_PROVIDER_ORDER.filter((item) => item.type === 'builtIn').map((item) => item.id),
+      ),
+    [],
+  )
+  const favoritePresetIds = useMemo(
+    () =>
+      new Set(
+        FAVORITE_PROVIDER_ORDER.filter((item) => item.type === 'preset').map((item) => item.id),
+      ),
+    [],
+  )
+  const favoriteItems = useMemo(() => {
+    return FAVORITE_PROVIDER_ORDER.map((item) => {
+      if (item.type === 'builtIn') {
+        const provider = filteredBuiltIns.find((entry) => String(entry.id) === item.id)
+        if (!provider) return null
+        return { type: 'builtIn' as const, provider }
+      }
+      const provider = filteredPresets.find((entry) => entry.id === item.id)
+      if (!provider) return null
+      return { type: 'preset' as const, provider }
+    }).filter(
+      (
+        item,
+      ): item is
+        | { type: 'builtIn'; provider: ProviderDefinition }
+        | { type: 'preset'; provider: CustomProviderConfig } => Boolean(item),
+    )
+  }, [filteredBuiltIns, filteredPresets])
+  const orderedBuiltIns = useMemo(
+    () => filteredBuiltIns.filter((provider) => !favoriteBuiltInIds.has(String(provider.id))),
+    [filteredBuiltIns, favoriteBuiltInIds],
+  )
+  const orderedPresets = useMemo(
+    () => filteredPresets.filter((provider) => !favoritePresetIds.has(provider.id)),
+    [filteredPresets, favoritePresetIds],
+  )
+
   const renderField = (field: ProviderField) => {
     const value = selectedConfig?.[field.name] || ''
     const isPassword = field.type === 'password'
@@ -761,12 +1053,66 @@ const ProviderSelect = () => {
     }
 
     try {
-      const url = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`)
-      updateConfig({ apiHost: url.host, apiPath: `${url.pathname}${url.search}` || '/' })
+      const hasExplicitProtocol = /^https?:\/\//i.test(trimmed)
+      const url = new URL(hasExplicitProtocol ? trimmed : `https://${trimmed}`)
+      const apiHost = hasExplicitProtocol ? `${url.protocol}//${url.host}` : url.host
+      updateConfig({ apiHost, apiPath: `${url.pathname}${url.search}` || '/' })
     } catch (error) {
-      const [host, ...pathParts] = trimmed.replace(/^https?:\/\//, '').split('/')
+      const protocolMatch = trimmed.match(/^(https?):\/\/(.+)$/i)
+      if (protocolMatch) {
+        const protocol = protocolMatch[1].toLowerCase()
+        const rest = protocolMatch[2]
+        const [host, ...pathParts] = rest.split('/')
+        updateConfig({
+          apiHost: `${protocol}://${host}`,
+          apiPath: `/${pathParts.join('/')}`,
+        })
+        return
+      }
+
+      const [host, ...pathParts] = trimmed.split('/')
       updateConfig({ apiHost: host, apiPath: `/${pathParts.join('/')}` })
     }
+  }
+
+  const composeApiUrl = (host: string, path: string) => {
+    if (!host) return ''
+    const base = /^https?:\/\//i.test(host) ? host : `https://${host}`
+    return `${base}${path || ''}`
+  }
+
+  const handleApplyCurl = () => {
+    const parsed = parseCurlConfig(curlInput)
+    if (!parsed) {
+      setToast({ text: '无法解析该 curl 命令', type: 'warning' })
+      return
+    }
+    const updates: Record<string, any> = {
+      apiHost: parsed.apiHost,
+      apiPath: parsed.apiPath,
+    }
+    if (parsed.authMethod) {
+      updates.authMethod = parsed.authMethod
+    }
+    if (parsed.authKeyName) {
+      updates.authKeyName = parsed.authKeyName
+    }
+    if (parsed.apiKey) {
+      updates.apiKey = parsed.apiKey
+    }
+    if (parsed.model) {
+      updates.model = parsed.model
+      setUseCustomModelInput(true)
+      setCustomModelInput(parsed.model)
+    }
+    if (parsed.requestFormat) {
+      updates.requestFormat = parsed.requestFormat
+    }
+    if (typeof parsed.stream === 'boolean') {
+      updates.stream = parsed.stream
+    }
+    updateConfig(updates)
+    setToast({ text: '已从 curl 自动填充配置', type: 'success' })
   }
 
   const getApiUrlValue = () => {
@@ -774,7 +1120,7 @@ const ProviderSelect = () => {
     const host = selectedConfig.apiHost || selectedDefinition.defaultHost
     const path = selectedConfig.apiPath || selectedDefinition.defaultPath
     if (!host) return ''
-    return `https://${host}${path || ''}`
+    return composeApiUrl(host, path || '')
   }
 
   if (loading) {
@@ -791,6 +1137,91 @@ const ProviderSelect = () => {
   const hasApiPath = selectedDefinition?.fields.some((field) => field.name === 'apiPath')
   const showApiUrlInput = Boolean(hasApiHost && hasApiPath)
   const hasPasswordField = selectedDefinition?.fields.some((field) => field.type === 'password')
+
+  const renderBuiltInProviderItem = (provider: ProviderDefinition) => {
+    const isActive = activeProvider === provider.id
+    const isSelected = selectedProvider === provider.id
+    const isConfigured = hasRequiredFields(provider, providerConfigs[provider.id as string] || {})
+    const isSupported = SUPPORTED_PROVIDER_IDS.has(provider.id as ProviderType)
+
+    return (
+      <div
+        key={provider.id as string}
+        className={`glarity--provider-item ${isSelected ? 'active' : ''} ${
+          !isSupported ? 'disabled' : ''
+        }`}
+        onClick={() => setSelectedProvider(provider.id as string)}
+      >
+        <div className="glarity--provider-item__meta">
+          <div className="glarity--provider-item__title">{provider.name}</div>
+          <div className="glarity--provider-item__desc">{provider.description}</div>
+          <div className="glarity--provider-item__badges">
+            {isActive && <span className="glarity--badge glarity--badge--active">默认</span>}
+            {isConfigured && <span className="glarity--badge glarity--badge--configured">已配置</span>}
+            {!isConfigured && isSupported && <span className="glarity--badge">需配置</span>}
+            {!isSupported && <span className="glarity--badge">暂未支持</span>}
+          </div>
+        </div>
+        <Toggle
+          checked={isActive}
+          disabled={!isSupported}
+          onChange={() => handleSetDefault(provider.id as string)}
+        />
+      </div>
+    )
+  }
+
+  const renderPresetProviderItem = (provider: CustomProviderConfig) => {
+    const definition = buildCustomDefinition(provider)
+    const isSelected = selectedProvider === provider.id
+    const isActive = activeProvider === provider.id
+    const isConfigured = hasRequiredFields(definition, providerConfigs[provider.id] || provider)
+    return (
+      <div
+        key={provider.id}
+        className={`glarity--provider-item ${isSelected ? 'active' : ''}`}
+        onClick={() => setSelectedProvider(provider.id)}
+      >
+        <div className="glarity--provider-item__meta">
+          <div className="glarity--provider-item__title">{provider.name}</div>
+          <div className="glarity--provider-item__desc">{provider.apiHost || definition.description}</div>
+          <div className="glarity--provider-item__badges">
+            {isActive && <span className="glarity--badge glarity--badge--active">默认</span>}
+            {isConfigured && <span className="glarity--badge glarity--badge--configured">已配置</span>}
+            {!isConfigured && <span className="glarity--badge">需配置</span>}
+            <span className="glarity--badge glarity--badge--preset">预置</span>
+          </div>
+        </div>
+        <Toggle checked={isActive} onChange={() => handleSetDefault(provider.id)} />
+      </div>
+    )
+  }
+
+  const renderCustomProviderItem = (provider: CustomProviderConfig) => {
+    const definition = buildCustomDefinition(provider)
+    const isSelected = selectedProvider === provider.id
+    const isActive = activeProvider === provider.id
+    const isConfigured = hasRequiredFields(definition, providerConfigs[provider.id] || provider)
+    return (
+      <div
+        key={provider.id}
+        className={`glarity--provider-item ${isSelected ? 'active' : ''}`}
+        onClick={() => setSelectedProvider(provider.id)}
+      >
+        <div className="glarity--provider-item__meta">
+          <div className="glarity--provider-item__title">{provider.name}</div>
+          <div className="glarity--provider-item__desc">{provider.apiHost}</div>
+          <div className="glarity--provider-item__badges">
+            {isActive && <span className="glarity--badge glarity--badge--active">默认</span>}
+            {isConfigured && <span className="glarity--badge glarity--badge--configured">已配置</span>}
+            {!isConfigured && <span className="glarity--badge">需配置</span>}
+            <span className="glarity--badge">实验性</span>
+          </div>
+        </div>
+        <Toggle checked={isActive} onChange={() => handleSetDefault(provider.id)} />
+      </div>
+    )
+  }
 
   return (
     <div className="glarity--provider-layout">
@@ -819,85 +1250,36 @@ const ProviderSelect = () => {
           onChange={(e) => setSearchValue(e.target.value)}
         />
 
+        {favoriteItems.length > 0 && (
+          <div className="glarity--provider-group">
+            <div className="glarity--provider-group-title">常用服务</div>
+            {favoriteItems.map((item) =>
+              item.type === 'builtIn'
+                ? renderBuiltInProviderItem(item.provider)
+                : renderPresetProviderItem(item.provider),
+            )}
+          </div>
+        )}
+
         <div className="glarity--provider-group">
           <div className="glarity--provider-group-title">内置服务</div>
-          {filteredBuiltIns.map((provider) => {
-            const isActive = activeProvider === provider.id
-            const isSelected = selectedProvider === provider.id
-            const isConfigured = hasRequiredFields(provider, providerConfigs[provider.id as string] || {})
-            const isSupported = SUPPORTED_PROVIDER_IDS.has(provider.id as ProviderType)
-
-            return (
-              <div
-                key={provider.id as string}
-                className={`glarity--provider-item ${isSelected ? 'active' : ''} ${
-                  !isSupported ? 'disabled' : ''
-                }`}
-                onClick={() => setSelectedProvider(provider.id as string)}
-              >
-                <div className="glarity--provider-item__meta">
-                  <div className="glarity--provider-item__title">{provider.name}</div>
-                  <div className="glarity--provider-item__desc">{provider.description}</div>
-                  <div className="glarity--provider-item__badges">
-                    {isActive && <span className="glarity--badge glarity--badge--active">默认</span>}
-                    {isConfigured && (
-                      <span className="glarity--badge glarity--badge--configured">已配置</span>
-                    )}
-                    {!isConfigured && isSupported && <span className="glarity--badge">需配置</span>}
-                    {!isSupported && <span className="glarity--badge">暂未支持</span>}
-                  </div>
-                </div>
-                <Toggle
-                  checked={isActive}
-                  disabled={!isSupported}
-                  onChange={() => handleSetDefault(provider.id as string)}
-                />
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="glarity--provider-group">
-          <div className="glarity--provider-group-title">高级模型</div>
-          {filteredPresets.length === 0 ? (
+          {orderedBuiltIns.length === 0 ? (
             <div className="glarity--provider-empty">
               <Text small>暂无匹配服务</Text>
             </div>
           ) : (
-            filteredPresets.map((provider) => {
-              const definition = buildCustomDefinition(provider)
-              const isSelected = selectedProvider === provider.id
-              const isActive = activeProvider === provider.id
-              const isConfigured = hasRequiredFields(
-                definition,
-                providerConfigs[provider.id] || provider,
-              )
-              return (
-                <div
-                  key={provider.id}
-                  className={`glarity--provider-item ${isSelected ? 'active' : ''}`}
-                  onClick={() => setSelectedProvider(provider.id)}
-                >
-                  <div className="glarity--provider-item__meta">
-                    <div className="glarity--provider-item__title">{provider.name}</div>
-                    <div className="glarity--provider-item__desc">
-                      {provider.apiHost || definition.description}
-                    </div>
-                    <div className="glarity--provider-item__badges">
-                      {isActive && (
-                        <span className="glarity--badge glarity--badge--active">默认</span>
-                      )}
-                      {isConfigured && (
-                        <span className="glarity--badge glarity--badge--configured">已配置</span>
-                      )}
-                      {!isConfigured && <span className="glarity--badge">需配置</span>}
-                      <span className="glarity--badge glarity--badge--preset">预置</span>
-                    </div>
-                  </div>
-                  <Toggle checked={isActive} onChange={() => handleSetDefault(provider.id)} />
-                </div>
-              )
-            })
+            orderedBuiltIns.map((provider) => renderBuiltInProviderItem(provider))
+          )}
+        </div>
+
+        <div className="glarity--provider-group">
+          <div className="glarity--provider-group-title">高级模型</div>
+          {orderedPresets.length === 0 ? (
+            <div className="glarity--provider-empty">
+              <Text small>暂无匹配服务</Text>
+            </div>
+          ) : (
+            orderedPresets.map((provider) => renderPresetProviderItem(provider))
           )}
         </div>
 
@@ -908,36 +1290,7 @@ const ProviderSelect = () => {
               <Text small>暂无自定义服务</Text>
             </div>
           ) : (
-            filteredCustoms.map((provider) => {
-              const definition = buildCustomDefinition(provider)
-              const isSelected = selectedProvider === provider.id
-              const isActive = activeProvider === provider.id
-              const isConfigured = hasRequiredFields(
-                definition,
-                providerConfigs[provider.id] || provider,
-              )
-              return (
-                <div
-                  key={provider.id}
-                  className={`glarity--provider-item ${isSelected ? 'active' : ''}`}
-                  onClick={() => setSelectedProvider(provider.id)}
-                >
-                  <div className="glarity--provider-item__meta">
-                    <div className="glarity--provider-item__title">{provider.name}</div>
-                    <div className="glarity--provider-item__desc">{provider.apiHost}</div>
-                    <div className="glarity--provider-item__badges">
-                      {isActive && <span className="glarity--badge glarity--badge--active">默认</span>}
-                      {isConfigured && (
-                        <span className="glarity--badge glarity--badge--configured">已配置</span>
-                      )}
-                      {!isConfigured && <span className="glarity--badge">需配置</span>}
-                      <span className="glarity--badge">实验性</span>
-                    </div>
-                  </div>
-                  <Toggle checked={isActive} onChange={() => handleSetDefault(provider.id)} />
-                </div>
-              )
-            })
+            filteredCustoms.map((provider) => renderCustomProviderItem(provider))
           )}
         </div>
       </div>
@@ -1010,6 +1363,14 @@ const ProviderSelect = () => {
                 </Button>
               </div>
             </div>
+            {testResult && (
+              <Text
+                small
+                className={testResult.success ? 'glarity--text-gray-500' : 'glarity--text-red-500'}
+              >
+                {testResult.message}
+              </Text>
+            )}
 
             <div className="glarity--provider-form">
               {isCustomProvider && (
@@ -1027,6 +1388,29 @@ const ProviderSelect = () => {
                       value={selectedConfig.name || ''}
                       onChange={(e) => updateConfig({ name: e.target.value })}
                     />
+                  </div>
+
+                  <div className="glarity--provider-form-row">
+                    <label className="glarity--text-sm glarity--font-medium">
+                      快速导入（粘贴 curl）
+                    </label>
+                    <textarea
+                      className="glarity--curl-import"
+                      placeholder={`curl https://api.example.com/v1/chat/completions -H "Authorization: Bearer sk-xxx" -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'`}
+                      value={curlInput}
+                      onChange={(e) => setCurlInput(e.currentTarget.value)}
+                    />
+                    <div className="glarity--button-row">
+                      <Button auto scale={0.8} type="secondary" onClick={handleApplyCurl}>
+                        解析并填充
+                      </Button>
+                      <Button auto scale={0.8} ghost onClick={() => setCurlInput('')}>
+                        清空
+                      </Button>
+                    </div>
+                    <Text small className="glarity--text-gray-500">
+                      自动提取 API 主机、路径、模型、认证方式与密钥，适配 OpenAI/Gemini/Ollama 风格请求
+                    </Text>
                   </div>
 
                   <div className="glarity--provider-form-row">
@@ -1095,6 +1479,9 @@ const ProviderSelect = () => {
                         onChange={(e) => {
                           const next = e.currentTarget.checked
                           setUseCustomModelInput(next)
+                          if (next) {
+                            setCustomModelInput(selectedConfig.model || customModelInput)
+                          }
                           if (!next && modelOptions.length > 0) {
                             updateConfig({ model: modelOptions[0] })
                           }
@@ -1102,6 +1489,16 @@ const ProviderSelect = () => {
                       />
                       <label htmlFor="glarity-use-custom-model">输入自定义模型名称</label>
                     </div>
+                  </div>
+
+                  <div className="glarity--provider-inline">
+                    <input
+                      type="checkbox"
+                      id="glarity-stream-enabled-custom"
+                      checked={selectedConfig.stream !== false}
+                      onChange={(e) => updateConfig({ stream: e.currentTarget.checked })}
+                    />
+                    <label htmlFor="glarity-stream-enabled-custom">启用流式输出（stream）</label>
                   </div>
 
                   <Collapse>
@@ -1258,6 +1655,9 @@ const ProviderSelect = () => {
                         onChange={(e) => {
                           const next = e.currentTarget.checked
                           setUseCustomModelInput(next)
+                          if (next) {
+                            setCustomModelInput(selectedConfig.model || customModelInput)
+                          }
                           if (!next && modelOptions.length > 0) {
                             updateConfig({ model: modelOptions[0] })
                           }
@@ -1265,6 +1665,16 @@ const ProviderSelect = () => {
                       />
                       <label htmlFor="glarity-use-custom-model">输入自定义模型名称</label>
                     </div>
+                  </div>
+
+                  <div className="glarity--provider-inline">
+                    <input
+                      type="checkbox"
+                      id="glarity-stream-enabled"
+                      checked={selectedConfig.stream !== false}
+                      onChange={(e) => updateConfig({ stream: e.currentTarget.checked })}
+                    />
+                    <label htmlFor="glarity-stream-enabled">启用流式输出（stream）</label>
                   </div>
 
                   <Collapse>
