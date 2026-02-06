@@ -294,14 +294,14 @@ export const CUSTOM_PROVIDER_TEMPLATE: ProviderDefinition = {
   description: '自定义OpenAI兼容API提供商（如OpenRouter、DeepSeek等）',
   website: 'https://openrouter.ai',
   apiKeyUrl: '',
-  defaultHost: 'api.openrouter.ai',
-  defaultPath: '/v1/chat/completions',
+  defaultHost: 'openrouter.ai',
+  defaultPath: '/api/v1/chat/completions',
   authMethod: 'bearer',
   requestFormat: 'openai',
   fields: [
     { name: 'apiKey', label: 'API KEY', type: 'password', placeholder: 'sk-********', required: true },
-    { name: 'apiHost', label: 'API主机', type: 'text', placeholder: 'api.openrouter.ai', required: true, description: 'API基础域名，如 api.deepseek.com' },
-    { name: 'apiPath', label: 'API路径', type: 'text', placeholder: '/v1/chat/completions', required: false },
+    { name: 'apiHost', label: 'API主机', type: 'text', placeholder: 'openrouter.ai', required: true, description: 'API基础域名，如 api.deepseek.com' },
+    { name: 'apiPath', label: 'API路径', type: 'text', placeholder: '/api/v1/chat/completions', required: false },
     { name: 'model', label: '模型名称', type: 'text', placeholder: '模型名称，如 deepseek-chat', required: true, description: '完整的模型ID，可以从服务商文档获取' }
   ],
   defaultModels: []

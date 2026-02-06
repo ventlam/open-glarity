@@ -900,9 +900,12 @@ export async function waitForYouTubeData(timeoutMs = 5000): Promise<boolean> {
       player.getPlayerResponse()?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length
     if (
       playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length ||
-      playerHasCaptions ||
-      playerReady
+      playerHasCaptions
     ) {
+      return true
+    }
+    // Avoid racing transcript fetch before caption tracks are attached.
+    if (playerReady && Date.now() - start > 2000) {
       return true
     }
     await new Promise((resolve) => setTimeout(resolve, 200))
@@ -945,25 +948,8 @@ export async function getConverTranscript({
       return [];
     }
 
-    let primaryLink = selectedOption.link
-    try {
-      const url = new URL(primaryLink)
-      if (!url.searchParams.has('fmt')) {
-        url.searchParams.set('fmt', 'json3')
-      }
-      primaryLink = url.toString()
-    } catch {
-      // ignore URL parse error, use original link
-    }
-
-    let rawTranscript: TranscriptSegment[] = []
-    try {
-      rawTranscript = await getRawTranscript(primaryLink)
-    } catch (error) {
-      console.warn('Primary transcript fetch failed, trying fallback:', error)
-      const fallbackUrl = buildTimedTextFallbackUrl(videoId, selectedOption)
-      rawTranscript = await getRawTranscript(fallbackUrl)
-    }
+    const candidateUrls = buildTranscriptCandidateUrls(videoId, selectedOption)
+    const rawTranscript = await getTranscriptFromCandidates(candidateUrls)
     
     if (!rawTranscript || rawTranscript.length === 0) {
       console.warn('Empty transcript received');
@@ -991,16 +977,69 @@ export async function getConverTranscript({
 function buildTimedTextFallbackUrl(
   videoId: string,
   option: { languageCode: string; isAuto: boolean },
+  format?: 'json3' | 'vtt',
 ): string {
   const params = new URLSearchParams({
     v: videoId,
     lang: option.languageCode,
-    fmt: 'json3',
   })
+  if (format) {
+    params.set('fmt', format)
+  }
   if (option.isAuto) {
     params.set('kind', 'asr')
   }
   return `https://www.youtube.com/api/timedtext?${params.toString()}`
+}
+
+function buildTranscriptCandidateUrls(
+  videoId: string,
+  option: { languageCode: string; isAuto: boolean; link: string },
+): string[] {
+  const candidates: string[] = []
+  const addCandidate = (value?: string) => {
+    if (!value) return
+    const normalized = value.trim()
+    if (!normalized) return
+    if (!candidates.includes(normalized)) {
+      candidates.push(normalized)
+    }
+  }
+
+  addCandidate(option.link)
+
+  try {
+    const rawUrl = new URL(option.link)
+    const json3Url = new URL(rawUrl.toString())
+    json3Url.searchParams.set('fmt', 'json3')
+    addCandidate(json3Url.toString())
+
+    const vttUrl = new URL(rawUrl.toString())
+    vttUrl.searchParams.set('fmt', 'vtt')
+    addCandidate(vttUrl.toString())
+  } catch {
+    // ignore invalid URL
+  }
+
+  addCandidate(buildTimedTextFallbackUrl(videoId, option, 'json3'))
+  addCandidate(buildTimedTextFallbackUrl(videoId, option, 'vtt'))
+  addCandidate(buildTimedTextFallbackUrl(videoId, option))
+
+  return candidates
+}
+
+async function getTranscriptFromCandidates(urls: string[]): Promise<TranscriptSegment[]> {
+  for (const url of urls) {
+    try {
+      const transcript = await getRawTranscript(url)
+      if (transcript && transcript.length > 0) {
+        return transcript
+      }
+    } catch (e) {
+      console.debug('Failed transcript candidate URL:', url, e)
+    }
+  }
+  return []
 }
 
 function getTimedTextUrlsFromPerformance(videoId: string): string[] {

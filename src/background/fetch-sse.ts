@@ -1,168 +1,193 @@
 import { createParser } from 'eventsource-parser'
-import { isEmpty } from 'lodash-es'
 import { streamAsyncIterable } from './stream-async-iterable.js'
+
+const isStreamRequest = (body: BodyInit | null | undefined) => {
+  if (typeof body !== 'string') return false
+  return /"stream"\s*:\s*true/.test(body)
+}
+
+const tryParseJson = (text: string) => {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+const parseErrorText = async (resp: Response): Promise<string> => {
+  try {
+    const data = await resp.json()
+    if (data && typeof data === 'object') {
+      return JSON.stringify(data)
+    }
+    if (typeof data === 'string') {
+      return data
+    }
+  } catch {
+    // fall through to text
+  }
+
+  try {
+    const text = await resp.text()
+    return text || `${resp.status} ${resp.statusText}`
+  } catch {
+    return `${resp.status} ${resp.statusText}`
+  }
+}
+
+const parseNdjsonLines = (chunk: string, emit: (value: string) => void) => {
+  const lines = chunk
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  let parsedCount = 0
+  for (const line of lines) {
+    if (line.startsWith('data:') || line.startsWith('event:') || line.startsWith(':')) {
+      continue
+    }
+    const obj = tryParseJson(line)
+    if (!obj) return 0
+    emit(JSON.stringify(obj))
+    parsedCount += 1
+  }
+  return parsedCount
+}
 
 export async function fetchSSE(
   resource: string,
   options: RequestInit & { onMessage: (message: string) => void },
 ) {
   const { onMessage, ...fetchOptions } = options
-  
+
   try {
-    // 记录请求详情
-    console.debug('SSE请求开始:', resource.includes('key=') ? resource.replace(/key=([^&]+)/, 'key=REDACTED') : resource)
-    console.debug('SSE请求头:', JSON.stringify(fetchOptions.headers))
-    console.debug('SSE请求体:', fetchOptions.body)
-    
     const resp = await fetch(resource, fetchOptions)
-    console.debug('SSE响应状态:', resp.status, resp.statusText)
-    console.debug('SSE响应头:', JSON.stringify(Object.fromEntries([...resp.headers.entries()])))
-    
-    // 处理错误响应
+
     if (!resp.ok) {
-      let errorText: string
-      
-      try {
-        // 尝试解析错误响应为JSON
-        const errorData = await resp.json()
-        errorText = !isEmpty(errorData) ? JSON.stringify(errorData) : `${resp.status} ${resp.statusText}`
-        console.error('SSE错误响应:', errorText)
-      } catch (e) {
-        // 如果不是JSON，尝试读取为文本
-        try {
-          errorText = await resp.text()
-          console.error('SSE错误响应(文本):', errorText)
-        } catch (textError) {
-          // 如果无法读取为文本，使用状态码和状态文本
-          errorText = `${resp.status} ${resp.statusText}`
-          console.error('SSE错误响应(状态):', errorText)
-        }
-      }
-      
-      // 格式化错误信息并发送给客户端
+      const errorText = await parseErrorText(resp)
       const errorObj = {
         error: {
           message: `API请求失败: ${errorText}`,
-          status: resp.status
-        }
+          status: resp.status,
+        },
       }
-      
+
       onMessage(JSON.stringify(errorObj))
       onMessage('[DONE]')
-      
+
       throw new Error(`API请求失败: ${errorText}`)
     }
-    
-    // 处理非标准响应类型 (非 SSE)
+
+    const wantsStream = isStreamRequest(fetchOptions.body)
     const contentType = resp.headers.get('content-type') || ''
-    if (!contentType.includes('text/event-stream')) {
-      console.warn('响应不是SSE格式:', contentType)
-      
-      // 尝试处理JSON响应
-      try {
-        const data = await resp.json()
-        console.debug('非SSE响应数据:', JSON.stringify(data))
-        
-        // 检查是否有错误信息
-        if (data.error) {
-          console.error('API返回错误:', data.error)
-          onMessage(JSON.stringify(data))
-        } else {
-          // 正常返回数据
-          onMessage(JSON.stringify(data))
-        }
-        
+    const isEventStream = contentType.includes('text/event-stream')
+
+    // Stream-first strategy:
+    // some providers/proxies stream chunks with a non-SSE content-type.
+    if (isEventStream || wantsStream) {
+      if (!resp.body) {
+        onMessage(JSON.stringify({ error: { message: '响应没有body' } }))
         onMessage('[DONE]')
         return
-      } catch (e) {
-        console.debug('非JSON响应，尝试处理文本内容')
-        
-        // 尝试处理文本响应
-        try {
-          const text = await resp.text()
-          console.debug('非SSE响应文本:', text)
+      }
 
-          const lines = text
-            .split(/\r?\n/)
-            .map((line) => line.trim())
-            .filter(Boolean)
-          if (lines.length > 1) {
-            let parsedLineCount = 0
-            for (const line of lines) {
-              try {
-                const lineObj = JSON.parse(line)
-                onMessage(JSON.stringify(lineObj))
-                parsedLineCount += 1
-              } catch {
-                parsedLineCount = 0
-                break
-              }
-            }
-            if (parsedLineCount === lines.length) {
-              onMessage('[DONE]')
-              return
-            }
+      let doneSeen = false
+      let streamed = false
+      const decoder = new TextDecoder()
+      let lineBuffer = ''
+
+      const parser = createParser((event) => {
+        if (event.type !== 'event') return
+        streamed = true
+        if (event.data === '[DONE]') {
+          doneSeen = true
+        }
+        onMessage(event.data)
+      })
+
+      for await (const chunk of streamAsyncIterable(resp.body)) {
+        const str = decoder.decode(chunk, { stream: true })
+        if (!str) continue
+
+        // Try SSE framing even when content-type is wrong.
+        parser.feed(str)
+
+        // Fallback: NDJSON chunk stream.
+        lineBuffer += str
+        let newlineIndex = lineBuffer.indexOf('\n')
+        while (newlineIndex !== -1) {
+          const line = lineBuffer.slice(0, newlineIndex)
+          lineBuffer = lineBuffer.slice(newlineIndex + 1)
+          if (parseNdjsonLines(line, onMessage) > 0) {
+            streamed = true
           }
-          
-          let responseObj
-          // 尝试解析文本是否为JSON
-          try {
-            responseObj = JSON.parse(text)
-          } catch (parseError) {
-            // 如果不是JSON，包装为对象
-            responseObj = { text: text }
-          }
-          
-          onMessage(JSON.stringify(responseObj))
-          onMessage('[DONE]')
-          return
-        } catch (textError) {
-          console.error('无法读取非SSE响应:', textError)
-          onMessage(JSON.stringify({ error: '无法读取响应内容' }))
+          newlineIndex = lineBuffer.indexOf('\n')
+        }
+      }
+
+      const tail = decoder.decode()
+      if (tail) {
+        parser.feed(tail)
+        lineBuffer += tail
+      }
+
+      if (lineBuffer.trim()) {
+        const parsedTail = parseNdjsonLines(lineBuffer, onMessage)
+        if (parsedTail > 0) {
+          streamed = true
+        } else if (!streamed) {
+          const obj = tryParseJson(lineBuffer)
+          onMessage(JSON.stringify(obj ?? { text: lineBuffer }))
+          streamed = true
+        }
+      }
+
+      if (!doneSeen) {
+        onMessage('[DONE]')
+      }
+      return
+    }
+
+    // Non-stream fallback
+    try {
+      const data = await resp.json()
+      onMessage(JSON.stringify(data))
+      onMessage('[DONE]')
+      return
+    } catch {
+      try {
+        const text = await resp.text()
+        if (!text) {
+          onMessage(JSON.stringify({ text: '' }))
           onMessage('[DONE]')
           return
         }
+
+        // One-shot NDJSON
+        const parsedLines = parseNdjsonLines(text, onMessage)
+        if (parsedLines > 0) {
+          onMessage('[DONE]')
+          return
+        }
+
+        const responseObj = tryParseJson(text) ?? { text }
+        onMessage(JSON.stringify(responseObj))
+        onMessage('[DONE]')
+        return
+      } catch (textError) {
+        console.error('无法读取非SSE响应:', textError)
+        onMessage(JSON.stringify({ error: '无法读取响应内容' }))
+        onMessage('[DONE]')
+        return
       }
     }
-    
-    // 标准SSE处理流程
-    const parser = createParser((event) => {
-      if (event.type === 'event') {
-        onMessage(event.data)
-      }
-    })
-    
-    console.debug('开始读取SSE流')
-    try {
-      // 确保响应体存在
-      if (!resp.body) {
-        throw new Error('响应没有body')
-      }
-      
-      for await (const chunk of streamAsyncIterable(resp.body)) {
-        const str = new TextDecoder().decode(chunk)
-        console.debug('SSE块:', str)
-        parser.feed(str)
-      }
-      console.debug('SSE流结束')
-    } catch (streamError) {
-      console.error('读取SSE流错误:', streamError)
-      // 通知客户端流处理出错
-      onMessage(JSON.stringify({ 
-        error: streamError instanceof Error ? streamError.message : '读取响应流失败' 
-      }))
-    }
-    
-    // 确保每次都发送DONE消息
-    onMessage('[DONE]')
   } catch (error) {
     console.error('fetchSSE错误:', error)
-    // 传递错误消息给调用者
-    onMessage(JSON.stringify({ 
+    onMessage(JSON.stringify({
       error: {
         message: error instanceof Error ? error.message : String(error),
-        type: 'fetch_error'
-      }
+        type: 'fetch_error',
+      },
     }))
     onMessage('[DONE]')
     throw error

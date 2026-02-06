@@ -40,6 +40,14 @@ export class UnifiedAIProvider implements Provider {
     
     // Build request body
     const body = this.buildRequestBody(provider, config, params.prompt)
+    const streamEnabled = !!(body && typeof body === 'object' && body.stream !== false)
+    const requestHeaders: Record<string, string> = { ...headers }
+    const hasAcceptHeader = Object.keys(requestHeaders).some(
+      (key) => key.toLowerCase() === 'accept',
+    )
+    if (!hasAcceptHeader) {
+      requestHeaders.Accept = streamEnabled ? 'text/event-stream' : 'application/json'
+    }
 
     let result = ''
     let messageId = ''
@@ -47,7 +55,7 @@ export class UnifiedAIProvider implements Provider {
     await fetchSSE(url, {
       method: 'POST',
       signal: params.signal,
-      headers,
+      headers: requestHeaders,
       body: JSON.stringify(body),
       onMessage(message) {
         if (message === '[DONE]') {
@@ -205,6 +213,30 @@ export class UnifiedAIProvider implements Provider {
         'stream' in body)
     ) {
       body.stream = streamEnabled
+    }
+
+    const apiHost = String(config?.apiHost || provider.defaultHost || '').toLowerCase()
+    const isOpenRouter = apiHost.includes('openrouter.ai')
+    if (isOpenRouter && body && typeof body === 'object' && provider.requestFormat === 'openai') {
+      const providerPrefs =
+        body.provider && typeof body.provider === 'object' ? { ...body.provider } : {}
+
+      // OpenRouter defaults to price-based balancing. For UX-facing summaries,
+      // prefer faster routes while keeping fallbacks enabled.
+      if (!('sort' in providerPrefs)) {
+        providerPrefs.sort = 'throughput'
+      }
+      if (!('allow_fallbacks' in providerPrefs)) {
+        providerPrefs.allow_fallbacks = true
+      }
+      if (!('preferred_min_throughput' in providerPrefs)) {
+        providerPrefs.preferred_min_throughput = 20
+      }
+      if (!('preferred_max_latency' in providerPrefs)) {
+        providerPrefs.preferred_max_latency = 8
+      }
+
+      body.provider = providerPrefs
     }
     return body
   }
